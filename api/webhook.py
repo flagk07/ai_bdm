@@ -17,8 +17,19 @@ app = FastAPI()
 settings = get_settings()
 bot = Bot(token=settings.telegram_bot_token)
 db = Database()
+# Bootstrap allowed users from env (e.g., 195830791)
+try:
+	db.ensure_allowed_users_bootstrap(settings.allowed_tg_ids_bootstrap)
+except Exception:
+	pass
+
 dp = Dispatcher()
 register_handlers(dp, db, bot, for_webhook=True)
+
+
+@app.get("/")
+async def root() -> JSONResponse:
+	return JSONResponse({"ok": True, "service": "ai-bdm"})
 
 
 @app.get("/api/health")
