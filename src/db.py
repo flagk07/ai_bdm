@@ -141,6 +141,11 @@ class Database:
 		)
 
 	def add_note(self, tg_id: int, content_sanitized: str) -> None:
+		# Ensure employee exists to satisfy FK
+		try:
+			self.client.table("employees").select("tg_id").eq("tg_id", tg_id).single().execute()
+		except Exception:
+			self.client.table("employees").insert({"tg_id": tg_id}).execute()
 		self.client.table("notes").insert({"tg_id": tg_id, "content_sanitized": content_sanitized}).execute()
 
 	def list_notes(self, tg_id: int, limit: int = 20) -> List[Dict[str, Any]]:
