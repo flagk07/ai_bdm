@@ -5,6 +5,6 @@ from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-@app.get("/api/health")
+@app.get("/")
 async def health() -> JSONResponse:
 	return JSONResponse({"ok": True}) 
