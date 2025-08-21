@@ -30,20 +30,37 @@ dp = Dispatcher(storage=storage)
 register_handlers(dp, db, bot, for_webhook=True)
 
 
+# Root
 @app.get("/")
 async def root() -> JSONResponse:
 	return JSONResponse({"ok": True, "service": "ai-bdm"})
 
-
-@app.get("/api/health")
-async def health() -> JSONResponse:
+# Health without prefix
+@app.get("/health")
+async def health_plain() -> JSONResponse:
 	return JSONResponse({"ok": True})
 
+# Health with /api prefix (Vercel routes)
+@app.get("/api/health")
+async def health_api() -> JSONResponse:
+	return JSONResponse({"ok": True})
 
-@app.post("/api/webhook")
-async def telegram_webhook(request: Request) -> JSONResponse:
+# Telegram webhook without prefix
+@app.post("/webhook")
+async def telegram_webhook_plain(request: Request) -> JSONResponse:
 	payload = await request.json()
-	# Debug log
+	try:
+		db.log(None, "webhook_receive", payload)
+	except Exception:
+		pass
+	update = Update.model_validate(payload)
+	await dp.feed_update(bot, update)
+	return JSONResponse({"ok": True})
+
+# Telegram webhook with /api prefix
+@app.post("/api/webhook")
+async def telegram_webhook_api(request: Request) -> JSONResponse:
+	payload = await request.json()
 	try:
 		db.log(None, "webhook_receive", payload)
 	except Exception:
