@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from src.config import get_settings
 from src.db import Database
@@ -23,7 +24,9 @@ try:
 except Exception:
 	pass
 
-dp = Dispatcher()
+# Use in-memory storage for FSM
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
 register_handlers(dp, db, bot, for_webhook=True)
 
 
@@ -40,6 +43,11 @@ async def health() -> JSONResponse:
 @app.post("/api/webhook")
 async def telegram_webhook(request: Request) -> JSONResponse:
 	payload = await request.json()
+	# Debug log
+	try:
+		db.log(None, "webhook_receive", payload)
+	except Exception:
+		pass
 	update = Update.model_validate(payload)
 	await dp.feed_update(bot, update)
 	return JSONResponse({"ok": True}) 
