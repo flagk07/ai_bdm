@@ -109,8 +109,28 @@ class Database:
 			"month": {"total": month_total, "by_product": month_by},
 		}
 
+	def stats_period(self, tg_id: int, start: date, end: date) -> Dict[str, Any]:
+		total, by_product = self._sum_attempts_query(tg_id, start, end)
+		return {"total": total, "by_product": by_product}
+
 	def month_ranking(self, month_first_day: date, today: date) -> List[Dict[str, Any]]:
 		res = self.client.table("attempts").select("tg_id, attempt_count").gte("for_date", month_first_day.isoformat()).lte("for_date", today.isoformat()).execute()
+		sums: Dict[int, int] = {}
+		for row in getattr(res, "data", []) or []:
+			tg = int(row.get("tg_id"))
+			sums[tg] = sums.get(tg, 0) + int(row.get("attempt_count", 0))
+		ranking: List[Tuple[int, str, int]] = []
+		if sums:
+			ids = list(sums.keys())
+			emp = self.client.table("employees").select("tg_id, agent_name, active").in_("tg_id", ids).eq("active", True).execute()
+			id_to_name = {int(r["tg_id"]): r["agent_name"] for r in (getattr(emp, "data", []) or [])}
+			for tg_id, total in sums.items():
+				ranking.append((tg_id, id_to_name.get(tg_id, f"agent?{tg_id}"), total))
+		ranking.sort(key=lambda x: x[2], reverse=True)
+		return [{"tg_id": tg, "agent_name": name, "total": total} for tg, name, total in ranking]
+
+	def group_ranking_period(self, start: date, end: date) -> List[Dict[str, Any]]:
+		res = self.client.table("attempts").select("tg_id, attempt_count").gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
 		sums: Dict[int, int] = {}
 		for row in getattr(res, "data", []) or []:
 			tg = int(row.get("tg_id"))
@@ -157,6 +177,10 @@ class Database:
 
 	def list_notes(self, tg_id: int, limit: int = 20) -> List[Dict[str, Any]]:
 		res = self.client.table("notes").select("created_at, content_sanitized").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
+		return getattr(res, "data", []) or []
+
+	def list_notes_period(self, tg_id: int, start: date, end: date, limit: int = 50) -> List[Dict[str, Any]]:
+		res = self.client.table("notes").select("created_at, content_sanitized").eq("tg_id", tg_id).gte("created_at", datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc).isoformat()).lte("created_at", datetime.combine(end, datetime.max.time(), tzinfo=timezone.utc).isoformat()).order("created_at", desc=True).limit(limit).execute()
 		return getattr(res, "data", []) or []
 
 	def add_assistant_message(self, tg_id: int, role: str, content_sanitized: str, off_topic: bool = False) -> None:

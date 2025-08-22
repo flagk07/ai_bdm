@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
+from datetime import date, datetime, timedelta
 
 from openai import OpenAI
 
@@ -14,22 +15,46 @@ ALLOWED_TOPICS_HINT = (
 )
 
 
-def _build_system_prompt(agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], notes_preview: str) -> str:
-	best_today = ", ".join([f"{r['agent_name']}" for r in group_month_ranking[:2]]) if group_month_ranking else "нет данных"
+def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, notes_preview: str) -> str:
 	system = (
-		"Ты — AI BDM‑коуч. Пиши кратко и по делу. Перечисления — нумерованные строки вида '1. ...',"
-		"без жирного, эмодзи и лишних символов. Формулировки прямые.\n"
-		"Темы строго: продукты банка, кросс‑продажи, скрипты, статистика, цели, план.\n"
-		"Оффтоп перенаправляй к рабочим темам.\n"
-		f"Агент: {agent_name}. Сегодня попыток: {user_stats.get('today', {}).get('total', 0)}. Лидеры: {best_today}.\n"
-		f"Недавние заметки:\n{notes_preview}"
+		"Ты — AI BDM‑коуч. Пиши кратко и по делу. Перечисления — нумерованные строки '1. ...'."
+		"Без жирного/эмодзи. Темы: продукты банка, кросс‑продажи, скрипты, статистика, цели, план.\n"
+		f"Текущие данные: {stats_line}. {group_line}\n"
+		f"Заметки сотрудника:\n{notes_preview}"
 	)
 	return system
 
 
+def _parse_period(user_text: str, today: date) -> Tuple[date, date, str]:
+	low = user_text.lower()
+	# Explicit date range dd.mm.yyyy - dd.mm.yyyy
+	import re
+	m = re.search(r"(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})\s*[–\-]\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})", low)
+	if m:
+		def to_d(s: str) -> date:
+			parts = re.split(r"[.\-/]", s)
+			day, mon, year = map(int, parts)
+			return date(year, mon, day)
+		start = to_d(m.group(1))
+		end = to_d(m.group(2))
+		return start, end, f"период {m.group(1)}–{m.group(2)}"
+	if "сегодня" in low:
+		return today, today, "сегодня"
+	if "вчера" in low:
+		y = today - timedelta(days=1)
+		return y, y, "вчера"
+	if "недел" in low:
+		start_week = today - timedelta(days=today.weekday())
+		return start_week, today, "текущая неделя"
+	if "месяц" in low:
+		start_month = today.replace(day=1)
+		return start_month, today, "текущий месяц"
+	# default: today
+	return today, today, "сегодня"
+
+
 def _is_off_topic(text: str) -> bool:
 	low = text.lower().strip()
-	# Accept pure numeric answer (menu selection like "4" or "10")
 	if low.isdigit():
 		return False
 	keywords = [
@@ -39,7 +64,6 @@ def _is_off_topic(text: str) -> bool:
 	for k in keywords:
 		if k in low:
 			return False
-	# Common off-topic patterns and cues
 	off_cues = [
 		"погода", "трамп", "президент", "регрессия", "кино", "игра", "анекдот",
 		"кто такой", "кто такая", "что такое", "алла", "пугачева", "пугачёва",
@@ -47,7 +71,6 @@ def _is_off_topic(text: str) -> bool:
 	for c in off_cues:
 		if c in low:
 			return True
-	# Default: off-topic when no allowed keywords
 	return True
 
 
@@ -62,22 +85,32 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	settings = get_settings()
 	client = OpenAI(api_key=settings.openai_api_key)
 
-	# Sanitize early and detect off-topic BEFORE calling the model
 	user_clean = sanitize_text(user_message)
+	today = date.today()
+	start, end, period_label = _parse_period(user_clean, today)
+
+	# Early off-topic block
 	off_topic = _is_off_topic(user_clean)
 	if off_topic:
 		redirect = _redirect_reply()
-		# Persist with off_topic flag, without calling the model
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=True)
 		db.add_assistant_message(tg_id, "assistant", sanitize_text(redirect), off_topic=False)
 		return redirect
 
-	# Context from DB
-	history = db.get_assistant_messages(tg_id, limit=20)
-	notes = db.list_notes(tg_id, limit=3)
-	notes_preview = "\n".join([f"1. {n['content_sanitized']}" if i == 0 else f"{i+1}. {n['content_sanitized']}" for i, n in enumerate(notes)]) if notes else "—"
+	# Data for the selected period (only employee notes)
+	period_stats = db.stats_period(tg_id, start, end)
+	group_rank = db.group_ranking_period(start, end)
+	best = ", ".join([f"{r['agent_name']}:{r['total']}" for r in group_rank[:2]]) if group_rank else "нет данных"
+	stats_line = f"{period_label}: всего {period_stats['total']}; по продуктам {period_stats['by_product']}"
+	group_line = f"Лидеры группы за {period_label}: {best}"
+	notes = db.list_notes_period(tg_id, start, end, limit=3)
+	notes_preview = "\n".join([f"{i+1}. {n['content_sanitized']}" for i, n in enumerate(notes)]) if notes else "—"
+
+	# Compose messages
 	messages: List[Dict[str, str]] = []
-	messages.append({"role": "system", "content": _build_system_prompt(agent_name, user_stats, group_month_ranking, notes_preview)})
+	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line, group_line, notes_preview)})
+	# Keep last chat history minimal to avoid polluting topic; include last 5
+	history = db.get_assistant_messages(tg_id, limit=5)
 	for m in history:
 		messages.append({"role": m["role"], "content": m["content_sanitized"]})
 	messages.append({"role": "user", "content": user_clean})
@@ -91,7 +124,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	answer = resp.choices[0].message.content or ""
 	answer_clean = sanitize_text(answer)
 
-	# Persist
+	# Store
 	db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 	db.add_assistant_message(tg_id, "assistant", answer_clean, off_topic=False)
 	return answer_clean 
