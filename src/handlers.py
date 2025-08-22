@@ -38,14 +38,18 @@ def main_keyboard() -> ReplyKeyboardMarkup:
 	], resize_keyboard=True)
 
 
+def _label(p: str, selected: Set[str]) -> str:
+	mark = "✅" if p in selected else "⬜️"
+	return f"{mark} {p}"
+
+
 def results_keyboard(selected: Set[str]) -> InlineKeyboardMarkup:
-	# 3 колонки × 3 строки
+	# 2 колонки → шире кнопки
 	buttons: List[List[InlineKeyboardButton]] = []
 	row: List[InlineKeyboardButton] = []
 	for idx, p in enumerate(PRODUCTS):
-		mark = "✅" if p in selected else "⬜️"
-		row.append(InlineKeyboardButton(text=f"{mark} {p}", callback_data=f"toggle:{p}"))
-		if (idx + 1) % 3 == 0:
+		row.append(InlineKeyboardButton(text=_label(p, selected), callback_data=f"toggle:{p}"))
+		if (idx + 1) % 2 == 0:
 			buttons.append(row)
 			row = []
 	if row:
