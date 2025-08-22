@@ -25,7 +25,7 @@ create table if not exists employees (
 create table if not exists attempts (
   id uuid primary key default gen_random_uuid(),
   tg_id bigint not null references employees(tg_id) on delete cascade,
-  product_code text not null check (product_code in ('КН','КСП','ПУ','ДК','ИК','ИЗП','НС','Вклад')),
+  product_code text not null check (product_code in ('КН','КСП','ПУ','ДК','ИК','ИЗП','НС','Вклад','КН к ЗП')),
   attempt_count int not null check (attempt_count >= 0),
   for_date date not null,
   created_at timestamptz not null default now()

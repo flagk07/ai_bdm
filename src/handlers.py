@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, Set
+from typing import Any, Dict, Set, List
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -15,7 +15,7 @@ from .db import Database
 from .pii import sanitize_text
 from .assistant import get_assistant_reply
 
-PRODUCTS = ["КН","КСП","ПУ","ДК","ИК","ИЗП","НС","Вклад"]
+PRODUCTS: List[str] = ["КН","КСП","ПУ","ДК","ИК","ИЗП","НС","Вклад","КН к ЗП"]
 
 
 class ResultStates(StatesGroup):
@@ -39,12 +39,19 @@ def main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def results_keyboard(selected: Set[str]) -> InlineKeyboardMarkup:
-	rows = []
-	for p in PRODUCTS:
+	# 3 колонки × 3 строки
+	buttons: List[List[InlineKeyboardButton]] = []
+	row: List[InlineKeyboardButton] = []
+	for idx, p in enumerate(PRODUCTS):
 		mark = "✅" if p in selected else "⬜️"
-		rows.append([InlineKeyboardButton(text=f"{mark} {p}", callback_data=f"toggle:{p}")])
-	rows.append([InlineKeyboardButton(text="Готово", callback_data="done"), InlineKeyboardButton(text="Отмена", callback_data="cancel")])
-	return InlineKeyboardMarkup(inline_keyboard=rows)
+		row.append(InlineKeyboardButton(text=f"{mark} {p}", callback_data=f"toggle:{p}"))
+		if (idx + 1) % 3 == 0:
+			buttons.append(row)
+			row = []
+	if row:
+		buttons.append(row)
+	buttons.append([InlineKeyboardButton(text="Готово", callback_data="done"), InlineKeyboardButton(text="Отмена", callback_data="cancel")])
+	return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bool = False) -> None:
