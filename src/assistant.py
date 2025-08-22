@@ -9,6 +9,11 @@ from .pii import sanitize_text
 from .db import Database
 
 
+ALLOWED_TOPICS_HINT = (
+	"банковские продукты; кросс‑продажи; скрипты; статистика; цели; план действий"
+)
+
+
 def _build_system_prompt(agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], notes_preview: str) -> str:
 	best_today = ", ".join([f"{r['agent_name']}" for r in group_month_ranking[:2]]) if group_month_ranking else "нет данных"
 	system = (
@@ -27,6 +32,24 @@ def _build_system_prompt(agent_name: str, user_stats: Dict[str, Any], group_mont
 		f"Недавние заметки агента:\n{notes_preview}"
 	)
 	return system
+
+
+def _is_off_topic(text: str) -> bool:
+	low = text.lower()
+	keywords = [
+		"кн", "ксп", "пу", "дк", "ик", "изп", "нс", "вклад", "кн к зп",
+		"продаж", "кросс", "скрипт", "возражен", "статист", "план", "цель", "клиент",
+	]
+	for k in keywords:
+		if k in low:
+			return False
+	# If contains typical off-topic cues, treat as off-topic
+	off_cues = ["погода", "трамп", "президент", "регрессия", "кино", "игра", "анекдот"]
+	for c in off_cues:
+		if c in low:
+			return True
+	# Default: consider off-topic if too short and none of allowed keywords
+	return True
 
 
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
@@ -53,7 +76,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	)
 	answer = resp.choices[0].message.content or ""
 	answer_clean = sanitize_text(answer)
-	# Persist
-	db.add_assistant_message(tg_id, "user", user_clean)
-	db.add_assistant_message(tg_id, "assistant", answer_clean)
+
+	# Determine off-topic and persist
+	off_topic = _is_off_topic(user_clean)
+	db.add_assistant_message(tg_id, "user", user_clean, off_topic=off_topic)
+	db.add_assistant_message(tg_id, "assistant", answer_clean, off_topic=False)
 	return answer_clean 

@@ -51,6 +51,17 @@ create table if not exists assistant_messages (
 );
 create index if not exists idx_assistant_msgs_tg_created on assistant_messages (tg_id, created_at desc);
 
+-- Add off_topic flag to assistant_messages (idempotent)
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'assistant_messages' AND column_name = 'off_topic'
+	) THEN
+		ALTER TABLE assistant_messages ADD COLUMN off_topic boolean not null default false;
+	END IF;
+END$$;
+
 -- Logs
 create table if not exists logs (
   id uuid primary key default gen_random_uuid(),

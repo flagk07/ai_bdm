@@ -156,11 +156,11 @@ class Database:
 		res = self.client.table("notes").select("created_at, content_sanitized").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
 		return getattr(res, "data", []) or []
 
-	def add_assistant_message(self, tg_id: int, role: str, content_sanitized: str) -> None:
-		self.client.table("assistant_messages").insert({"tg_id": tg_id, "role": role, "content_sanitized": content_sanitized}).execute()
+	def add_assistant_message(self, tg_id: int, role: str, content_sanitized: str, off_topic: bool = False) -> None:
+		self.client.table("assistant_messages").insert({"tg_id": tg_id, "role": role, "content_sanitized": content_sanitized, "off_topic": off_topic}).execute()
 
 	def get_assistant_messages(self, tg_id: int, limit: int = 20) -> List[Dict[str, Any]]:
-		res = self.client.table("assistant_messages").select("role, content_sanitized").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
+		res = self.client.table("assistant_messages").select("role, content_sanitized, off_topic").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
 		msgs = getattr(res, "data", []) or []
 		msgs.reverse()
 		return msgs 
