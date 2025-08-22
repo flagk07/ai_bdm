@@ -165,18 +165,16 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		month_rank = db.month_ranking(today.replace(day=1), today)
 		pos = next((i+1 for i, r in enumerate(month_rank) if r["tg_id"] == user_id), None)
 		top2, bottom2 = db.day_top_bottom(today)
+		top_str = ", ".join([r["agent_name"] for r in top2]) if top2 else "—"
+		bottom_str = ", ".join([r["agent_name"] for r in bottom2]) if bottom2 else "—"
 		lines = [
-			f"Вы: {emp.agent_name} — место в рейтинге за месяц: {pos if pos else '—'}",
-			f"День: {stats['today']['total']}",
-			f"Неделя: {stats['week']['total']}",
-			f"Месяц: {stats['month']['total']}",
-			"Топ-2 сегодня:" if top2 else "Топ-2 сегодня: —",
+			f"1. Агент: {emp.agent_name} — место за месяц: {pos if pos else '—'} 🏆",
+			f"2. Сегодня: {stats['today']['total']} 🎯",
+			f"3. Неделя: {stats['week']['total']} 📅",
+			f"4. Месяц: {stats['month']['total']} 📊",
+			f"5. Топ-2 сегодня: {top_str} 🥇",
+			f"6. Антилидеры: {bottom_str} 🧱",
 		]
-		for r in top2:
-			lines.append(f"{r['agent_name']}")
-		lines.append("Худшие-2 сегодня:" if bottom2 else "Худшие-2 сегодня: —")
-		for r in bottom2:
-			lines.append(f"{r['agent_name']}")
 		await message.answer("\n".join(lines), reply_markup=main_keyboard())
 
 	@dp.message(F.text == "Заметки")
