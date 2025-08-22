@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                           KeyboardButton, Message, ReplyKeyboardMarkup)
 
@@ -30,7 +28,7 @@ class AssistantStates(StatesGroup):
 
 @dataclass
 class ResultSession:
-	counts: Dict[str, int]
+	selected: Set[str]
 
 
 def main_keyboard() -> ReplyKeyboardMarkup:
@@ -40,11 +38,11 @@ def main_keyboard() -> ReplyKeyboardMarkup:
 	], resize_keyboard=True)
 
 
-def results_keyboard(counts: Dict[str, int]) -> InlineKeyboardMarkup:
+def results_keyboard(selected: Set[str]) -> InlineKeyboardMarkup:
 	rows = []
 	for p in PRODUCTS:
-		c = counts.get(p, 0)
-		rows.append([InlineKeyboardButton(text=f"{p} [{c}] ➕", callback_data=f"inc:{p}"), InlineKeyboardButton(text="➖", callback_data=f"dec:{p}")])
+		mark = "✅" if p in selected else "⬜️"
+		rows.append([InlineKeyboardButton(text=f"{mark} {p}", callback_data=f"toggle:{p}")])
 	rows.append([InlineKeyboardButton(text="Готово", callback_data="done"), InlineKeyboardButton(text="Отмена", callback_data="cancel")])
 	return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -80,29 +78,20 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			await message.answer("Временная ошибка базы. Повторите позже.", reply_markup=main_keyboard())
 			return
 		await state.set_state(ResultStates.selecting)
-		await state.update_data(session=ResultSession(counts={}).__dict__)
-		await message.answer("Выберите продукты и количество попыток", reply_markup=results_keyboard({}))
+		await state.update_data(session=ResultSession(selected=set()).__dict__)
+		await message.answer("Отметьте продукты (чек-боксы)", reply_markup=results_keyboard(set()))
 
-	@dp.callback_query(ResultStates.selecting, F.data.startswith("inc:"))
-	async def inc_count(call: CallbackQuery, state: FSMContext) -> None:
+	@dp.callback_query(ResultStates.selecting, F.data.startswith("toggle:"))
+	async def toggle_product(call: CallbackQuery, state: FSMContext) -> None:
 		data = await state.get_data()
-		session = ResultSession(**data.get("session"))
+		session = ResultSession(set(data.get("session", {}).get("selected", [])))
 		p = call.data.split(":",1)[1]
-		session.counts[p] = session.counts.get(p, 0) + 1
-		await state.update_data(session=session.__dict__)
-		await call.message.edit_reply_markup(reply_markup=results_keyboard(session.counts))
-		await call.answer()
-
-	@dp.callback_query(ResultStates.selecting, F.data.startswith("dec:"))
-	async def dec_count(call: CallbackQuery, state: FSMContext) -> None:
-		data = await state.get_data()
-		session = ResultSession(**data.get("session"))
-		p = call.data.split(":",1)[1]
-		current = session.counts.get(p, 0)
-		if current > 0:
-			session.counts[p] = current - 1
-		await state.update_data(session=session.__dict__)
-		await call.message.edit_reply_markup(reply_markup=results_keyboard(session.counts))
+		if p in session.selected:
+			session.selected.remove(p)
+		else:
+			session.selected.add(p)
+		await state.update_data(session={"selected": list(session.selected)})
+		await call.message.edit_reply_markup(reply_markup=results_keyboard(session.selected))
 		await call.answer()
 
 	@dp.callback_query(ResultStates.selecting, F.data == "cancel")
@@ -122,13 +111,14 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.callback_query(ResultStates.selecting, F.data == "done")
 	async def done_results(call: CallbackQuery, state: FSMContext) -> None:
 		data = await state.get_data()
-		session = ResultSession(**data.get("session"))
+		selected = set(data.get("session", {}).get("selected", []))
 		try:
 			emp = db.get_or_register_employee(call.from_user.id)
 			if not emp:
 				raise RuntimeError("employee missing")
-			db.save_attempts(call.from_user.id, session.counts, date.today())
-			db.log(call.from_user.id, "save_attempts", session.counts)
+			attempts = {p: 1 for p in selected}
+			db.save_attempts(call.from_user.id, attempts, date.today())
+			db.log(call.from_user.id, "save_attempts", attempts)
 			try:
 				await call.message.edit_text("Результат сохранен")
 			except Exception:
