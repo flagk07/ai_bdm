@@ -43,18 +43,38 @@ def _is_off_topic(text: str) -> bool:
 	for k in keywords:
 		if k in low:
 			return False
-	# If contains typical off-topic cues, treat as off-topic
-	off_cues = ["погода", "трамп", "президент", "регрессия", "кино", "игра", "анекдот"]
+	# Common off-topic patterns and cues
+	off_cues = [
+		"погода", "трамп", "президент", "регрессия", "кино", "игра", "анекдот",
+		"кто такой", "кто такая", "что такое", "алла", "пугачева", "пугачёва",
+	]
 	for c in off_cues:
 		if c in low:
 			return True
-	# Default: consider off-topic if too short and none of allowed keywords
+	# Default: consider off-topic when no allowed keywords
 	return True
+
+
+def _redirect_reply() -> str:
+	return (
+		"Это вне рабочих тем. Давайте к делу: продукты, кросс‑продажи, скрипты, статистика.\n"
+		"Могу: разобрать встречу, поставить цель на день/неделю, предложить план по продуктам."
+	)
 
 
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
 	settings = get_settings()
 	client = OpenAI(api_key=settings.openai_api_key)
+
+	# Sanitize early and detect off-topic BEFORE calling the model
+	user_clean = sanitize_text(user_message)
+	off_topic = _is_off_topic(user_clean)
+	if off_topic:
+		redirect = _redirect_reply()
+		# Persist with off_topic flag, without calling the model
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=True)
+		db.add_assistant_message(tg_id, "assistant", sanitize_text(redirect), off_topic=False)
+		return redirect
 
 	# Context from DB
 	history = db.get_assistant_messages(tg_id, limit=20)
@@ -64,8 +84,6 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	messages.append({"role": "system", "content": _build_system_prompt(agent_name, user_stats, group_month_ranking, notes_preview)})
 	for m in history:
 		messages.append({"role": m["role"], "content": m["content_sanitized"]})
-
-	user_clean = sanitize_text(user_message)
 	messages.append({"role": "user", "content": user_clean})
 
 	resp = client.chat.completions.create(
@@ -77,8 +95,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	answer = resp.choices[0].message.content or ""
 	answer_clean = sanitize_text(answer)
 
-	# Determine off-topic and persist
-	off_topic = _is_off_topic(user_clean)
-	db.add_assistant_message(tg_id, "user", user_clean, off_topic=off_topic)
+	# Persist
+	db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 	db.add_assistant_message(tg_id, "assistant", answer_clean, off_topic=False)
 	return answer_clean 
