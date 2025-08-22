@@ -31,6 +31,9 @@ NUM_TOKEN_RE = re.compile(rf"(?:\d+|[xX*]+|{RUS_NUM_TOKEN})", re.IGNORECASE)
 # Sequence: 7+ tokens separated by spaces/punct or 'и'
 NUM_SEQ_RE = re.compile(rf"(?:{NUM_TOKEN_RE.pattern})(?:[\s\-–—/().,]*?(?:и\s+)??(?:{NUM_TOKEN_RE.pattern})){6,}", re.IGNORECASE)
 
+# Mixed digits + Russian letters sequence (e.g., "36семь96"), with total digits >=5 inside the run
+MIXED_PHONE_LIKE_RE = re.compile(r"(?=(?:.*\d){5,})(?=(?:.*[А-Яа-яЁё]){1,})(?:[\dXx*А-Яа-яЁё]+[\s\-–—/().]?){3,}[\dXx*А-Яа-яЁё]+", re.IGNORECASE)
+
 
 def sanitize_text(text: Optional[str]) -> str:
 	if not text:
@@ -50,6 +53,8 @@ def sanitize_text(text: Optional[str]) -> str:
 	clean = MASKED_DIGITS_RE.sub("[phone]", clean)
 	# Masked long number sequences using Russian number words and digits
 	clean = NUM_SEQ_RE.sub("[phone]", clean)
+	# Mixed digits+letters runs resembling phones
+	clean = MIXED_PHONE_LIKE_RE.sub("[phone]", clean)
 	# Names (Cyrillic FIO)
 	clean = FIO_STRICT_RE.sub("[name]", clean)
 	clean = FIO_THREE_RE.sub("[name]", clean)
