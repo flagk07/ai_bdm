@@ -17,25 +17,21 @@ ALLOWED_TOPICS_HINT = (
 def _build_system_prompt(agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], notes_preview: str) -> str:
 	best_today = ", ".join([f"{r['agent_name']}" for r in group_month_ranking[:2]]) if group_month_ranking else "нет данных"
 	system = (
-		"Ты — AI BDM‑коуч для полевых сотрудников банка. Общайся конкретно и по делу,"
-		"держи низкую эмоциональность. Помогай с тактикой кросс‑продаж, ставь достижимые цели,"
-		"подсвечивай отставание/перевыполнение плана. Избегай ПДн.\n"
-		"Строго ограничься следующими темами: банковские продукты, сценарии кросс‑продаж,"
-		"скрипты коммуникации с клиентом, статистика и результаты менеджера, групповая статистика,"
-		"постановка целей и рекомендации по улучшению показателей.\n"
-		"Если вопрос вне этих тем (история, политика, программирование, общие знания и пр.),"
-		"не отвечай по сути — мягко перенаправь разговор в рабочее русло, предложи обсудить"
-		"актуальные встречи, продукты или план действий.\n"
-		f"Агент: {agent_name}.\n"
-		f"Его результаты сегодня: {user_stats.get('today', {}).get('total', 0)} попыток.\n"
-		f"Лидеры группы сегодня: {best_today}.\n"
-		f"Недавние заметки агента:\n{notes_preview}"
+		"Ты — AI BDM‑коуч. Отвечай кратко. Если перечисление — используй строки, начинающиеся с '- ',"
+		"без жирного, эмодзи и лишних символов. Формулировки прямые, без воды.\n"
+		"Темы строго: продукты банка, кросс‑продажи, скрипты, статистика, цели, план.\n"
+		"Оффтоп перенаправляй к рабочим темам.\n"
+		f"Агент: {agent_name}. Сегодня попыток: {user_stats.get('today', {}).get('total', 0)}. Лидеры: {best_today}.\n"
+		f"Недавние заметки:\n{notes_preview}"
 	)
 	return system
 
 
 def _is_off_topic(text: str) -> bool:
-	low = text.lower()
+	low = text.lower().strip()
+	# Accept pure numeric answer (menu selection like "4" or "10")
+	if low.isdigit():
+		return False
 	keywords = [
 		"кн", "ксп", "пу", "дк", "ик", "изп", "нс", "вклад", "кн к зп",
 		"продаж", "кросс", "скрипт", "возражен", "статист", "план", "цель", "клиент",
@@ -51,14 +47,14 @@ def _is_off_topic(text: str) -> bool:
 	for c in off_cues:
 		if c in low:
 			return True
-	# Default: consider off-topic when no allowed keywords
+	# Default: off-topic when no allowed keywords
 	return True
 
 
 def _redirect_reply() -> str:
 	return (
-		"Это вне рабочих тем. Давайте к делу: продукты, кросс‑продажи, скрипты, статистика.\n"
-		"Могу: разобрать встречу, поставить цель на день/неделю, предложить план по продуктам."
+		"Это вне рабочих тем. Вернёмся к делу: продукты, кросс‑продажи, скрипты, статистика.\n"
+		"- Разбор встречи\n- Цель на день/неделю\n- План по продуктам"
 	)
 
 
@@ -90,7 +86,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		model="gpt-4o-mini",
 		messages=messages,
 		temperature=0.2,
-		max_tokens=400,
+		max_tokens=350,
 	)
 	answer = resp.choices[0].message.content or ""
 	answer_clean = sanitize_text(answer)
