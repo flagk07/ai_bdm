@@ -35,10 +35,11 @@ async def _set_commands() -> None:
 		await bot.set_my_commands([BotCommand(command="menu", description="Показать меню")])
 	except Exception:
 		pass
-	# Start periodic scheduler (every 5 minutes) and daily summary
-	async def push(chat_id: int, text: str) -> None:
-		await bot.send_message(chat_id, text)
-	StatsScheduler(db, push).start()
+	# Start periodic scheduler only if enabled via env
+	if os.environ.get("NOTIFY_ENABLED", "").lower() in ("1", "true", "yes", "on"):  # default OFF
+		async def push(chat_id: int, text: str) -> None:
+			await bot.send_message(chat_id, text)
+		StatsScheduler(db, push).start()
 
 
 @app.get("/")
