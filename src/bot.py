@@ -261,10 +261,6 @@ async def run_bot() -> None:
 	# Native command menu
 	try:
 		await bot.set_my_commands([
-			BotCommand(command="result", description="Внести результат"),
-			BotCommand(command="stats", description="Статистика"),
-			BotCommand(command="assistant", description="Помощник"),
-			BotCommand(command="notes", description="Заметки"),
 			BotCommand(command="menu", description="Показать меню"),
 		])
 	except Exception:

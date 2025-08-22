@@ -5,7 +5,7 @@ import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher
-from aiogram.types import Update
+from aiogram.types import Update, BotCommand
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from src.config import get_settings
@@ -26,6 +26,14 @@ except Exception:
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 register_handlers(dp, db, bot, for_webhook=True)
+
+
+@app.on_event("startup")
+async def _set_commands() -> None:
+	try:
+		await bot.set_my_commands([BotCommand(command="menu", description="Показать меню")])
+	except Exception:
+		pass
 
 
 @app.get("/")
