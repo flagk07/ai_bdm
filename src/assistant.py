@@ -17,8 +17,8 @@ ALLOWED_TOPICS_HINT = (
 def _build_system_prompt(agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], notes_preview: str) -> str:
 	best_today = ", ".join([f"{r['agent_name']}" for r in group_month_ranking[:2]]) if group_month_ranking else "нет данных"
 	system = (
-		"Ты — AI BDM‑коуч. Отвечай кратко. Если перечисление — используй строки, начинающиеся с '- ',"
-		"без жирного, эмодзи и лишних символов. Формулировки прямые, без воды.\n"
+		"Ты — AI BDM‑коуч. Пиши кратко и по делу. Перечисления — нумерованные строки вида '1. ...',"
+		"без жирного, эмодзи и лишних символов. Формулировки прямые.\n"
 		"Темы строго: продукты банка, кросс‑продажи, скрипты, статистика, цели, план.\n"
 		"Оффтоп перенаправляй к рабочим темам.\n"
 		f"Агент: {agent_name}. Сегодня попыток: {user_stats.get('today', {}).get('total', 0)}. Лидеры: {best_today}.\n"
@@ -54,7 +54,7 @@ def _is_off_topic(text: str) -> bool:
 def _redirect_reply() -> str:
 	return (
 		"Это вне рабочих тем. Вернёмся к делу: продукты, кросс‑продажи, скрипты, статистика.\n"
-		"- Разбор встречи\n- Цель на день/неделю\n- План по продуктам"
+		"1. Разбор встречи\n2. Цель на день/неделю\n3. План по продуктам"
 	)
 
 
@@ -75,7 +75,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# Context from DB
 	history = db.get_assistant_messages(tg_id, limit=20)
 	notes = db.list_notes(tg_id, limit=3)
-	notes_preview = "\n".join([f"- {n['content_sanitized']}" for n in notes]) if notes else "—"
+	notes_preview = "\n".join([f"1. {n['content_sanitized']}" if i == 0 else f"{i+1}. {n['content_sanitized']}" for i, n in enumerate(notes)]) if notes else "—"
 	messages: List[Dict[str, str]] = []
 	messages.append({"role": "system", "content": _build_system_prompt(agent_name, user_stats, group_month_ranking, notes_preview)})
 	for m in history:
