@@ -53,6 +53,12 @@ def _parse_period(user_text: str, today: date) -> Tuple[date, date, str]:
 	return today, today, "сегодня"
 
 
+def _is_stats_request(text: str) -> bool:
+	low = text.lower()
+	keys = ["статист", "итог", "лидер", "рейтинг", "сколько сделал", "по продуктам"]
+	return any(k in low for k in keys)
+
+
 def _is_off_topic(text: str) -> bool:
 	low = text.lower().strip()
 	if low.isdigit():
@@ -72,6 +78,20 @@ def _is_off_topic(text: str) -> bool:
 		if c in low:
 			return True
 	return True
+
+
+def _format_stats_reply(period_label: str, total: int, by_product: Dict[str, int], leaders: List[Dict[str, Any]]) -> str:
+	# Sort products by desc count, show all non-zero; if none, show "нет"
+	items = [(p, c) for p, c in by_product.items() if c > 0]
+	items.sort(key=lambda x: x[1], reverse=True)
+	products_str = ", ".join([f"{p}:{c}" for p, c in items]) if items else "нет"
+	leaders_str = ", ".join([f"{r['agent_name']}:{r['total']}" for r in leaders[:3]]) if leaders else "нет"
+	return (
+		f"1. Период: {period_label} 📅\n"
+		f"2. Итого попыток: {total} 🎯\n"
+		f"3. По продуктам: {products_str} 📊\n"
+		f"4. Лидеры группы: {leaders_str} 🏅"
+	)
 
 
 def _redirect_reply() -> str:
@@ -97,16 +117,26 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "assistant", sanitize_text(redirect), off_topic=False)
 		return redirect
 
-	# Data for the selected period (only employee notes)
+	# Period data
 	period_stats = db.stats_period(tg_id, start, end)
 	group_rank = db.group_ranking_period(start, end)
-	best = ", ".join([f"{r['agent_name']}:{r['total']}" for r in group_rank[:2]]) if group_rank else "нет данных"
-	stats_line = f"{period_label}: всего {period_stats['total']}; по продуктам {period_stats['by_product']}"
-	group_line = f"Лидеры группы за {period_label}: {best}"
+
+	# Direct stats reply with emojis if requested
+	if _is_stats_request(user_clean):
+		reply = _format_stats_reply(period_label, int(period_stats.get("total", 0)), period_stats.get("by_product", {}), group_rank)
+		reply_clean = sanitize_text(reply)
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "assistant", reply_clean, off_topic=False)
+		return reply_clean
+
+	# Notes only from employee for context
 	notes = db.list_notes_period(tg_id, start, end, limit=3)
 	notes_preview = "\n".join([f"{i+1}. {n['content_sanitized']}" for i, n in enumerate(notes)]) if notes else "—"
 
-	# Compose messages
+	# Compose messages for model
+	stats_line = f"{period_label}: всего {period_stats['total']}; по продуктам {period_stats['by_product']}"
+	best = ", ".join([f"{r['agent_name']}:{r['total']}" for r in group_rank[:2]]) if group_rank else "нет данных"
+	group_line = f"Лидеры группы за {period_label}: {best}"
 	messages: List[Dict[str, str]] = []
 	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line, group_line, notes_preview)})
 	# Keep last chat history minimal to avoid polluting topic; include last 5
