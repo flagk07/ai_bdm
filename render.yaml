@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ai-bdm
+    env: docker
+    plan: free
+    autoDeploy: true
+    dockerCommand: uvicorn api.webhook:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_API_KEY
+        sync: false
+      - key: ALLOWED_TG_IDS
+        sync: false
+      - key: APP_TIMEZONE
+        value: Europe/Moscow 
