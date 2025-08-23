@@ -14,16 +14,12 @@ DOB_RE = re.compile(r"\b(0?[1-9]|[12]\d|3[01])[.\-/](0?[1-9]|1[0-2])[.\-/](19|20
 MASKED_DIGITS_RE = re.compile(r"(?:(?:[\dXx*][\s\-().]){6,}[\dXx*])")
 PHONE_RE = re.compile(r"(?:\+?\d[\s\-().]?){7,15}")
 
-# Cyrillic FIO patterns
-# Surname (common suffixes) + Name + Patronymic (common suffixes), case-insensitive
+# Cyrillic FIO patterns (strict)
 FIO_STRICT_RE = re.compile(
-	r"\b[А-Яа-яЁё]{2,}(?:ов|ев|ёв|ин|ын|ский|цкий|ко|ук|юк|ыч|ский|ская|ий|ый|ая)\s+"
-	r"[А-Яа-яЁё]{2,}\s+"
-	r"[А-Яа-яЁё]{2,}(?:ович|евич|ич|овна|евна|ична|инична)\b",
-	re.IGNORECASE,
+	r"\b[А-ЯЁ][а-яё]+(?:ов|ев|ёв|ин|ын|ский|цкий|ко|ук|юк|ыч|ая|ий|ый|ская)\s+"
+	r"[А-ЯЁ][а-яё]+\s+"
+	r"[А-ЯЁ][а-яё]+(?:ович|евич|ич|овна|евна|ична|инична)\b"
 )
-# Fallback: any 3 Cyrillic words in a row (may over-match, use carefully)
-FIO_THREE_RE = re.compile(r"\b[А-Яа-яЁё]{2,}\s+[А-Яа-яЁё]{2,}\s+[А-Яа-яЁё]{2,}\b", re.IGNORECASE)
 
 # Russian number words (tokens) for masked numbers/phones
 RUS_NUM_TOKEN = r"(?:ноль|нуль|один|одна|одно|два|две|три|четыре|пять|шесть|семь|восемь|девять|десять|одиннадцать|двенадцать|тринадцать|четырнадцать|пятнадцать|шестнадцать|семнадцать|восемнадцать|девятнадцать|двадцать|тридцать|сорок|пятьдесят|шестьдесят|семьдесят|восемьдесят|девяносто|сто|двести|триста|четыреста|пятьсот|шестьсот|семьсот|восемьсот|девятьсот|тысяч[аеиоуы]*|миллион[аов]*|миллиард[аов]*)"
@@ -55,9 +51,8 @@ def sanitize_text(text: Optional[str]) -> str:
 	clean = NUM_SEQ_RE.sub("[phone]", clean)
 	# Mixed digits+letters runs resembling phones
 	clean = MIXED_PHONE_LIKE_RE.sub("[phone]", clean)
-	# Names (Cyrillic FIO)
+	# Names (strict FIO only)
 	clean = FIO_STRICT_RE.sub("[name]", clean)
-	clean = FIO_THREE_RE.sub("[name]", clean)
 	# Collapse whitespace
 	clean = re.sub(r"\s{2,}", " ", clean).strip()
 	return clean 
