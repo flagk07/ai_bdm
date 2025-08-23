@@ -9,6 +9,7 @@ import pytz
 
 from .config import get_settings
 from .db import Database
+from .assistant import get_assistant_reply
 
 
 class StatsScheduler:
@@ -63,38 +64,40 @@ class StatsScheduler:
 			tg = int(r["tg_id"])
 			name = r["agent_name"]
 			# current totals
-			today_total = self.db._sum_attempts_query(tg, today, today)[0]
-			week_total = self.db._sum_attempts_query(tg, start_week, end_week)[0]
-			month_total = self.db._sum_attempts_query(tg, start_month, end_month)[0]
+			today_total, _ = self.db._sum_attempts_query(tg, today, today)
+			week_total, _ = self.db._sum_attempts_query(tg, start_week, end_week)
+			month_total, _ = self.db._sum_attempts_query(tg, start_month, end_month)
 			# previous totals
-			prev_day_total = self.db._sum_attempts_query(tg, today - timedelta(days=1), today - timedelta(days=1))[0]
-			prev_week_total = self.db._sum_attempts_query(tg, start_prev_w, end_prev_w)[0]
-			prev_month_total = self.db._sum_attempts_query(tg, start_prev_m, end_prev_m)[0]
+			prev_day_total, _ = self.db._sum_attempts_query(tg, today - timedelta(days=1), today - timedelta(days=1))
+			prev_week_total, _ = self.db._sum_attempts_query(tg, start_prev_w, end_prev_w)
+			prev_month_total, _ = self.db._sum_attempts_query(tg, start_prev_m, end_prev_m)
 			# deltas
 			d_day = self._delta_pct(today_total, prev_day_total)
 			d_week = self._delta_pct(week_total, prev_week_total)
 			d_month = self._delta_pct(month_total, prev_month_total)
-			# simple recommendations
-			recs = []
-			if d_day < 0:
-				recs.append("усилить сегодня 1‑2 продукта")
-			if d_week < 0:
-				recs.append("закрыть просадку по неделе")
-			if d_month < 0:
-				recs.append("пересобрать план на месяц")
-			if not recs:
-				recs.append("держим темп")
-			rec_line = "; ".join(recs)
-			# goals: placeholder (не задана)
-			goal_line = "—"
-			text = (
+			# numeric part
+			numeric_text = (
 				f"1. {name} — авто‑сводка\n"
 				f"2. Сегодня: {today_total} (Δ {d_day}%) 🎯\n"
 				f"3. Неделя: {week_total} (Δ {d_week}%) 📅\n"
 				f"4. Месяц: {month_total} (Δ {d_month}%) 📊\n"
-				f"5. Цели: {goal_line} 🎯\n"
-				f"6. Комментарий: {rec_line} 💡\n"
-				f"7. Продолжить: /assistant"
+			)
+			# assistant live comment
+			stats_dwm = self.db.stats_day_week_month(tg, today)
+			month_rank = self.db.month_ranking(start_month, end_month)
+			assistant_prompt = (
+				"Дай краткий комментарий по динамике за сегодня/неделю/месяц, 3–4 пункта. "
+				"Формат строго нумерованный '1. ...'. Без жирного/эмодзи. "
+				"Если видишь спад — один конкретный вопрос для выяснения и один шаг‑совет. "
+				f"Данные: сегодня {today_total} (Δ {d_day}%), неделя {week_total} (Δ {d_week}%), месяц {month_total} (Δ {d_month}%)."
+			)
+			assistant_comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, assistant_prompt)
+			# final text
+			text = (
+				numeric_text
+				+ f"5. Цели: — 🎯\n"
+				+ f"6. Комментарий ассистента:\n{assistant_comment}\n"
+				+ f"7. Продолжить: /assistant"
 			)
 			await self.push_func(tg, text)
 

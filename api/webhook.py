@@ -29,14 +29,20 @@ dp = Dispatcher(storage=storage)
 register_handlers(dp, db, bot, for_webhook=True)
 
 
+def _env_off(val: str | None) -> bool:
+	if not val:
+		return False
+	return val.lower() in ("0", "false", "no", "off")
+
+
 @app.on_event("startup")
 async def _set_commands() -> None:
 	try:
 		await bot.set_my_commands([BotCommand(command="menu", description="Показать меню")])
 	except Exception:
 		pass
-	# Start periodic scheduler only if enabled via env
-	if os.environ.get("NOTIFY_ENABLED", "").lower() in ("1", "true", "yes", "on"):  # default OFF
+	# Start periodic scheduler by default; allow disabling via NOTIFY_ENABLED=0/false/no/off
+	if not _env_off(os.environ.get("NOTIFY_ENABLED")):
 		async def push(chat_id: int, text: str) -> None:
 			await bot.send_message(chat_id, text)
 		StatsScheduler(db, push).start()
