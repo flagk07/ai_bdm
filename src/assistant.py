@@ -61,15 +61,10 @@ def _is_stats_request(text: str) -> bool:
 
 def _is_off_topic(text: str) -> bool:
 	low = text.lower().strip()
+	# Numeric menu answer is allowed
 	if low.isdigit():
 		return False
-	keywords = [
-		"кн", "ксп", "пу", "дк", "ик", "изп", "нс", "вклад", "кн к зп",
-		"продаж", "кросс", "скрипт", "возражен", "статист", "план", "цель", "клиент",
-	]
-	for k in keywords:
-		if k in low:
-			return False
+	# Explicit off-topic cues → True
 	off_cues = [
 		"погода", "трамп", "президент", "регрессия", "кино", "игра", "анекдот",
 		"кто такой", "кто такая", "что такое", "алла", "пугачева", "пугачёва",
@@ -77,7 +72,8 @@ def _is_off_topic(text: str) -> bool:
 	for c in off_cues:
 		if c in low:
 			return True
-	return True
+	# Default: treat as on-topic
+	return False
 
 
 def _format_stats_reply(period_label: str, total: int, by_product: Dict[str, int], leaders: List[Dict[str, Any]]) -> str:
