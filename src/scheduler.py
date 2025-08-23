@@ -63,8 +63,8 @@ class StatsScheduler:
 		for r in (emps.data or []):
 			tg = int(r["tg_id"])
 			name = r["agent_name"]
-			# current totals
-			today_total, _ = self.db._sum_attempts_query(tg, today, today)
+			# current totals and breakdown for today
+			today_total, today_by = self.db._sum_attempts_query(tg, today, today)
 			week_total, _ = self.db._sum_attempts_query(tg, start_week, end_week)
 			month_total, _ = self.db._sum_attempts_query(tg, start_month, end_month)
 			# previous totals
@@ -75,29 +75,35 @@ class StatsScheduler:
 			d_day = self._delta_pct(today_total, prev_day_total)
 			d_week = self._delta_pct(week_total, prev_week_total)
 			d_month = self._delta_pct(month_total, prev_month_total)
-			# numeric part
-			numeric_text = (
-				f"1. {name} — авто‑сводка\n"
-				f"2. Сегодня: {today_total} (Δ {d_day}%) 🎯\n"
-				f"3. Неделя: {week_total} (Δ {d_week}%) 📅\n"
-				f"4. Месяц: {month_total} (Δ {d_month}%) 📊\n"
-			)
-			# assistant live comment
+			# format breakdown like "2КН, 3КСП"
+			items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
+			items.sort(key=lambda x: (-x[1], x[0]))
+			breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
+			# message header and lines with "- "
+			header = f"{name} — авто‑сводка\n"
+			lines = [
+				f"- Сегодня: {today_total} (Δ {d_day}%) 🎯",
+				f"- Сегодня по продуктам: {breakdown}",
+				f"- Неделя: {week_total} (Δ {d_week}%) 📅",
+				f"- Месяц: {month_total} (Δ {d_month}%) 📊",
+			]
+			# assistant live plain-text comment
 			stats_dwm = self.db.stats_day_week_month(tg, today)
 			month_rank = self.db.month_ranking(start_month, end_month)
 			assistant_prompt = (
-				"Дай краткий комментарий по динамике за сегодня/неделю/месяц, 3–4 пункта. "
-				"Формат строго нумерованный '1. ...'. Без жирного/эмодзи. "
-				"Если видишь спад — один конкретный вопрос для выяснения и один шаг‑совет. "
+				"Дай краткий комментарий по динамике за сегодня/неделю/месяц в виде одного абзаца "
+				"(2–3 коротких предложения), без списков и нумерации, без жирного и эмодзи. "
+				"Если есть снижение — задай 1 уточняющий вопрос и предложи 1 конкретное действие. "
+				"Учитывай, что после сообщения сотрудник может перейти в /assistant. "
 				f"Данные: сегодня {today_total} (Δ {d_day}%), неделя {week_total} (Δ {d_week}%), месяц {month_total} (Δ {d_month}%)."
 			)
 			assistant_comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, assistant_prompt)
+			assistant_comment = assistant_comment.replace('\n', ' ').strip()
 			# final text
 			text = (
-				numeric_text
-				+ f"5. Цели: — 🎯\n"
-				+ f"6. Комментарий ассистента:\n{assistant_comment}\n"
-				+ f"7. Продолжить: /assistant"
+				header + "\n".join(lines) + "\n"
+				+ f"Комментарий ассистента: {assistant_comment}\n"
+				+ "Продолжить: /assistant"
 			)
 			await self.push_func(tg, text)
 
