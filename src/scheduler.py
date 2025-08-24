@@ -138,6 +138,8 @@ class StatsScheduler:
 				show_d_day = created_at_date <= prev_day
 				show_d_week = created_at_date <= end_prev_w
 				show_d_month = created_at_date <= end_prev_m
+			# plans and RR
+			plan = self.db.compute_plan_breakdown(tg, today)
 			# format breakdown like "2КН, 3КСП"
 			items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
 			items.sort(key=lambda x: (-x[1], x[0]))
@@ -147,21 +149,23 @@ class StatsScheduler:
 			lines = []
 			# day line
 			if show_d_day:
-				lines.append(f"- Сегодня: {today_total} (Δ {self._format_delta(d_day)}%) 🎯")
+				lines.append(f"- Сегодня: {today_total} / план {plan['plan_day']} (Δ {self._format_delta(d_day)}%) 🎯")
 			else:
-				lines.append(f"- Сегодня: {today_total} 🎯")
+				lines.append(f"- Сегодня: {today_total} / план {plan['plan_day']} 🎯")
 			# products
 			lines.append(f"- Сегодня по продуктам: {breakdown}")
 			# week line
 			if show_d_week:
-				lines.append(f"- Неделя: {week_total} (Δ {self._format_delta(d_week)}%) 📅")
+				lines.append(f"- Неделя: {week_total} / план {plan['plan_week']} (Δ {self._format_delta(d_week)}%) 📅")
 			else:
-				lines.append(f"- Неделя: {week_total} 📅")
+				lines.append(f"- Неделя: {week_total} / план {plan['plan_week']} 📅")
 			# month line
 			if show_d_month:
-				lines.append(f"- Месяц: {month_total} (Δ {self._format_delta(d_month)}%) 📊")
+				lines.append(f"- Месяц: {month_total} / план {plan['plan_month']} (Δ {self._format_delta(d_month)}%) 📊")
 			else:
-				lines.append(f"- Месяц: {month_total} 📊")
+				lines.append(f"- Месяц: {month_total} / план {plan['plan_month']} 📊")
+			# RR month
+			lines.append(f"- RR месяца: {plan['rr_month']}")
 			text = header + "\n".join(lines) + "\n"
 			# Choose comment source: AI if enabled, else deterministic
 			if self._env_on(os.environ.get("AI_SUMMARY")):

@@ -162,6 +162,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			return
 		today = date.today()
 		stats = db.stats_day_week_month(user_id, today)
+		plan = db.compute_plan_breakdown(user_id, today)
 		month_rank = db.month_ranking(today.replace(day=1), today)
 		pos = next((i+1 for i, r in enumerate(month_rank) if r["tg_id"] == user_id), None)
 		top2, bottom2 = db.day_top_bottom(today)
@@ -169,11 +170,12 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		bottom_str = ", ".join([r["agent_name"] for r in bottom2]) if bottom2 else "—"
 		lines = [
 			f"1. Агент: {emp.agent_name} — место за месяц: {pos if pos else '—'} 🏆",
-			f"2. Сегодня: {stats['today']['total']} 🎯",
-			f"3. Неделя: {stats['week']['total']} 📅",
-			f"4. Месяц: {stats['month']['total']} 📊",
-			f"5. Топ-2 сегодня: {top_str} 🥇",
-			f"6. Антилидеры: {bottom_str} 🧱",
+			f"2. Сегодня: {stats['today']['total']} / план {plan['plan_day']} 🎯",
+			f"3. Неделя: {stats['week']['total']} / план {plan['plan_week']} 📅",
+			f"4. Месяц: {stats['month']['total']} / план {plan['plan_month']} 📊",
+			f"5. RR месяца: {plan['rr_month']} 📈",
+			f"6. Топ-2 сегодня: {top_str} 🥇",
+			f"7. Антилидеры: {bottom_str} 🧱",
 		]
 		await message.answer("\n".join(lines), reply_markup=main_keyboard())
 
