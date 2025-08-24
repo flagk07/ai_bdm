@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, Tuple, List
 
@@ -9,6 +10,7 @@ import pytz
 
 from .config import get_settings
 from .db import Database
+from .assistant import get_assistant_reply
 
 
 class StatsScheduler:
@@ -79,6 +81,11 @@ class StatsScheduler:
 				lines.append("2. Действие: используйте короткий скрипт открытия и уточняющий вопрос.")
 		return lines
 
+	def _env_on(self, val: str | None) -> bool:
+		if not val:
+			return False
+		return val.lower() in ("1", "true", "yes", "on")
+
 	async def _send_periodic(self) -> None:
 		today = date.today()
 		start_week, end_week = self._week_range(today)
@@ -122,8 +129,21 @@ class StatsScheduler:
 				f"- Неделя: {week_total} (Δ {d_week}%) 📅",
 				f"- Месяц: {month_total} (Δ {d_month}%) 📊",
 			]
-			coach = self._coach_lines(today_by or {}, d_day, d_week, d_month)
-			text = header + "\n".join(lines) + "\n" + "\n".join(coach) + "\n" + "Обсудить с помощником: /assistant"
+			text = header + "\n".join(lines) + "\n"
+			# Choose comment source: AI if enabled, else deterministic
+			if self._env_on(os.environ.get("AI_SUMMARY")):
+				stats_dwm = self.db.stats_day_week_month(tg, today)
+				month_rank = self.db.month_ranking(start_month, end_month)
+				ai_prompt = (
+					"Дай 2–4 нумерованных пункта (1.,2.,3.,4.) без воды: краткая диагностика и конкретные шаги. "
+					"Не повторяй цифры из сводки, фокус — почему так и что сделать сегодня/на неделе. Без жирного и эмодзи."
+				)
+				comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, ai_prompt)
+				text += comment + "\n"
+			else:
+				coach = self._coach_lines(today_by or {}, d_day, d_week, d_month)
+				text += "\n".join(coach) + "\n"
+			text += "Обсудить с помощником: /assistant"
 			await self.push_func(tg, text)
 
 	def start(self) -> None:
