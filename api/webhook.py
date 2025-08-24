@@ -41,6 +41,23 @@ async def _set_commands() -> None:
 		await bot.set_my_commands([BotCommand(command="menu", description="Показать меню")])
 	except Exception:
 		pass
+	# Auto-set Telegram webhook if WEBHOOK_URL or RENDER_EXTERNAL_URL provided
+	try:
+		base = os.environ.get("WEBHOOK_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+		if base:
+			url = base.rstrip('/')
+			if not url.endswith('/webhook'):
+				url = url + '/webhook'
+			await bot.set_webhook(url, drop_pending_updates=True)
+			try:
+				db.log(None, "set_webhook", {"url": url, "ok": True})
+			except Exception:
+				pass
+	except Exception as e:
+		try:
+			db.log(None, "set_webhook_error", {"error": str(e)})
+		except Exception:
+			pass
 	# Start periodic scheduler by default; allow disabling via NOTIFY_ENABLED=0/false/no/off
 	if not _env_off(os.environ.get("NOTIFY_ENABLED")):
 		async def push(chat_id: int, text: str) -> None:
