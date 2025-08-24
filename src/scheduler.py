@@ -42,6 +42,10 @@ class StatsScheduler:
 		base = previous if previous > 0 else 1
 		return int(round((current - previous) * 100 / base))
 
+	def _format_delta(self, d: int) -> str:
+		# Show explicit + only for positive values; zero stays as 0
+		return f"+{d}" if d > 0 else (f"{d}" if d < 0 else "0")
+
 	async def _send_daily(self) -> None:
 		today = date.today()
 		# get all employees
@@ -93,10 +97,18 @@ class StatsScheduler:
 		start_month, end_month = self._month_range(today)
 		start_prev_m, end_prev_m = self._prev_month_range(today)
 
-		emps = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
+		emps = self.db.client.table("employees").select("tg_id, agent_name, active, created_at").eq("active", True).execute()
 		for r in (emps.data or []):
 			tg = int(r["tg_id"])
 			name = r["agent_name"]
+			# parse employee registration date
+			created_at_raw = r.get("created_at")
+			created_at_date: date | None = None
+			try:
+				if created_at_raw:
+					created_at_date = datetime.fromisoformat(str(created_at_raw).replace("Z", "+00:00")).date()
+			except Exception:
+				created_at_date = None
 			# current totals and breakdown for today
 			today_total, today_by = self.db._sum_attempts_query(tg, today, today)
 			# Guard: ensure today_total equals sum of breakdown
@@ -117,18 +129,39 @@ class StatsScheduler:
 			d_day = self._delta_pct(today_total, prev_day_total)
 			d_week = self._delta_pct(week_total, prev_week_total)
 			d_month = self._delta_pct(month_total, prev_month_total)
+			# gating: show delta only if employee existed in the whole previous period
+			show_d_day = False
+			show_d_week = False
+			show_d_month = False
+			if created_at_date:
+				prev_day = today - timedelta(days=1)
+				show_d_day = created_at_date <= prev_day
+				show_d_week = created_at_date <= end_prev_w
+				show_d_month = created_at_date <= end_prev_m
 			# format breakdown like "2КН, 3КСП"
 			items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
 			items.sort(key=lambda x: (-x[1], x[0]))
 			breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
 			# message header and lines with "- "
 			header = f"{name} — авто‑сводка\n"
-			lines = [
-				f"- Сегодня: {today_total} (Δ {d_day}%) 🎯",
-				f"- Сегодня по продуктам: {breakdown}",
-				f"- Неделя: {week_total} (Δ {d_week}%) 📅",
-				f"- Месяц: {month_total} (Δ {d_month}%) 📊",
-			]
+			lines = []
+			# day line
+			if show_d_day:
+				lines.append(f"- Сегодня: {today_total} (Δ {self._format_delta(d_day)}%) 🎯")
+			else:
+				lines.append(f"- Сегодня: {today_total} 🎯")
+			# products
+			lines.append(f"- Сегодня по продуктам: {breakdown}")
+			# week line
+			if show_d_week:
+				lines.append(f"- Неделя: {week_total} (Δ {self._format_delta(d_week)}%) 📅")
+			else:
+				lines.append(f"- Неделя: {week_total} 📅")
+			# month line
+			if show_d_month:
+				lines.append(f"- Месяц: {month_total} (Δ {self._format_delta(d_month)}%) 📊")
+			else:
+				lines.append(f"- Месяц: {month_total} 📊")
 			text = header + "\n".join(lines) + "\n"
 			# Choose comment source: AI if enabled, else deterministic
 			if self._env_on(os.environ.get("AI_SUMMARY")):
