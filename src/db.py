@@ -10,6 +10,43 @@ from .config import get_settings
 from .pii import sanitize_text
 
 
+# Simple RU 2025 workdays calendar: Mon-Fri are working days; exclude official holidays
+_RU_2025_HOLIDAYS = {
+	date(2025, 1, 1), date(2025, 1, 2), date(2025, 1, 3), date(2025, 1, 6), date(2025, 1, 7), date(2025, 1, 8),
+	date(2025, 2, 24),
+	date(2025, 3, 10),
+	date(2025, 5, 1), date(2025, 5, 2), date(2025, 5, 9),
+	date(2025, 6, 12),
+	date(2025, 11, 4),
+}
+
+
+def is_workday(d: date) -> bool:
+	# Mon-Fri and not holiday
+	return d.weekday() < 5 and d not in _RU_2025_HOLIDAYS
+
+
+def count_workdays(start: date, end: date) -> int:
+	cnt = 0
+	d = start
+	while d <= end:
+		if is_workday(d):
+			cnt += 1
+		d += timedelta(days=1)
+	return cnt
+
+
+def month_workdays(d: date) -> int:
+	first = d.replace(day=1)
+	last = (first.replace(day=28) + timedelta(days=10)).replace(day=1) - timedelta(days=1)
+	return count_workdays(first, last)
+
+
+def month_workdays_elapsed(d: date) -> int:
+	first = d.replace(day=1)
+	return count_workdays(first, d)
+
+
 @dataclass
 class Employee:
 	tg_id: int
@@ -66,6 +103,51 @@ class Database:
 		except Exception:
 			pass
 
+	# Plans API
+	def get_or_create_month_plan(self, tg_id: int, d: date, default_plan: int = 200) -> int:
+		year, month = d.year, d.month
+		res = self.client.table("sales_plans").select("plan_month").eq("tg_id", tg_id).eq("year", year).eq("month", month).maybe_single().execute()
+		row = getattr(res, "data", None)
+		if row and "plan_month" in row:
+			return int(row["plan_month"])
+		self.client.table("sales_plans").upsert({"tg_id": tg_id, "year": year, "month": month, "plan_month": default_plan}, on_conflict="tg_id,year,month").execute()
+		return default_plan
+
+	def compute_plan_breakdown(self, tg_id: int, d: date) -> Dict[str, Any]:
+		plan_month = self.get_or_create_month_plan(tg_id, d)
+		mw = month_workdays(d)
+		pd = int(round(plan_month / mw)) if mw > 0 else plan_month
+		# week plan = daily plan * number of workdays in this week (Mon-Fri)
+		start_week = d - timedelta(days=d.weekday())
+		end_week = start_week + timedelta(days=6)
+		week_days = count_workdays(start_week, end_week)
+		pw = pd * week_days
+		# RR = (fact per working days elapsed / elapsed_workdays) * total_workdays_month
+		elapsed = month_workdays_elapsed(d)
+		today_total, _ = self._sum_attempts_query(tg_id, d.replace(day=1), d)
+		rr = int(round((today_total / (elapsed if elapsed > 0 else 1)) * mw)) if mw > 0 else today_total
+		return {"plan_month": plan_month, "plan_day": pd, "plan_week": pw, "rr_month": rr, "workdays_month": mw, "workdays_elapsed": elapsed}
+
+	def stats_period(self, tg_id: int, start: date, end: date) -> Dict[str, Any]:
+		total, by_product = self._sum_attempts_query(tg_id, start, end)
+		return {"total": total, "by_product": by_product}
+
+	def group_ranking_period(self, start: date, end: date) -> List[Dict[str, Any]]:
+		res = self.client.table("attempts").select("tg_id, attempt_count").gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
+		sums: Dict[int, int] = {}
+		for row in getattr(res, "data", []) or []:
+			tg = int(row.get("tg_id"))
+			sums[tg] = sums.get(tg, 0) + int(row.get("attempt_count", 0))
+		ranking: List[Tuple[int, str, int]] = []
+		if sums:
+			ids = list(sums.keys())
+			emp = self.client.table("employees").select("tg_id, agent_name, active").in_("tg_id", ids).eq("active", True).execute()
+			id_to_name = {int(r["tg_id"]): r["agent_name"] for r in (getattr(emp, "data", []) or [])}
+			for tg_id, total in sums.items():
+				ranking.append((tg_id, id_to_name.get(tg_id, f"agent?{tg_id}"), total))
+		ranking.sort(key=lambda x: x[2], reverse=True)
+		return [{"tg_id": tg, "agent_name": name, "total": total} for tg, name, total in ranking]
+
 	def save_attempts(self, tg_id: int, attempts: Dict[str, int], for_date: date) -> None:
 		# Ensure employee exists to satisfy FK
 		try:
@@ -109,28 +191,8 @@ class Database:
 			"month": {"total": month_total, "by_product": month_by},
 		}
 
-	def stats_period(self, tg_id: int, start: date, end: date) -> Dict[str, Any]:
-		total, by_product = self._sum_attempts_query(tg_id, start, end)
-		return {"total": total, "by_product": by_product}
-
 	def month_ranking(self, month_first_day: date, today: date) -> List[Dict[str, Any]]:
 		res = self.client.table("attempts").select("tg_id, attempt_count").gte("for_date", month_first_day.isoformat()).lte("for_date", today.isoformat()).execute()
-		sums: Dict[int, int] = {}
-		for row in getattr(res, "data", []) or []:
-			tg = int(row.get("tg_id"))
-			sums[tg] = sums.get(tg, 0) + int(row.get("attempt_count", 0))
-		ranking: List[Tuple[int, str, int]] = []
-		if sums:
-			ids = list(sums.keys())
-			emp = self.client.table("employees").select("tg_id, agent_name, active").in_("tg_id", ids).eq("active", True).execute()
-			id_to_name = {int(r["tg_id"]): r["agent_name"] for r in (getattr(emp, "data", []) or [])}
-			for tg_id, total in sums.items():
-				ranking.append((tg_id, id_to_name.get(tg_id, f"agent?{tg_id}"), total))
-		ranking.sort(key=lambda x: x[2], reverse=True)
-		return [{"tg_id": tg, "agent_name": name, "total": total} for tg, name, total in ranking]
-
-	def group_ranking_period(self, start: date, end: date) -> List[Dict[str, Any]]:
-		res = self.client.table("attempts").select("tg_id, attempt_count").gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
 		sums: Dict[int, int] = {}
 		for row in getattr(res, "data", []) or []:
 			tg = int(row.get("tg_id"))

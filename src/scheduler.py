@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Tuple, List
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -9,7 +9,6 @@ import pytz
 
 from .config import get_settings
 from .db import Database
-from .assistant import get_assistant_reply
 
 
 class StatsScheduler:
@@ -52,6 +51,34 @@ class StatsScheduler:
 			)
 			await self.push_func(int(r["tg_id"]), text)
 
+	def _coach_lines(self, today_by: Dict[str, int], d_day: int, d_week: int, d_month: int) -> List[str]:
+		lines: List[str] = []
+		# 1) Если спад сегодня — уточнить причину и предложить действие
+		if d_day < 0:
+			lines.append(f"1. Спад сегодня (Δ {d_day}%). Что мешает: трафик, отказ, скрипт?")
+			lines.append("2. Действие: сделайте 3 доп. попытки по сильному продукту до конца дня.")
+		# 2) Если неделя проседает — план
+		elif d_week < 0:
+			lines.append(f"1. Неделя проседает (Δ {d_week}%). Где теряем: первая встреча или дожим?")
+			lines.append("2. Действие: добавьте 5 целевых предложений на следующей смене.")
+		# 3) Если месяц проседает — пересбор плана
+		elif d_month < 0:
+			lines.append(f"1. Месяц ниже темпа (Δ {d_month}%).")
+			lines.append("2. Действие: пересоберите план по 2 продуктам с наибольшей воронкой.")
+		# 4) Иначе — усиление сильной стороны и расширение
+		else:
+			# Найти сильный продукт сегодня
+			top = None
+			if today_by:
+				top = max(today_by.items(), key=lambda x: x[1])
+			if top and top[1] > 0:
+				lines.append(f"1. Сильная сторона: {top[0]} — продолжайте в том же темпе.")
+				lines.append("2. Действие: добавьте смежный продукт в каждый диалог.")
+			else:
+				lines.append("1. Сегодня ещё нет попыток — начните с 3 быстрых предложений по ключевому продукту.")
+				lines.append("2. Действие: используйте короткий скрипт открытия и уточняющий вопрос.")
+		return lines
+
 	async def _send_periodic(self) -> None:
 		today = date.today()
 		start_week, end_week = self._week_range(today)
@@ -87,24 +114,8 @@ class StatsScheduler:
 				f"- Неделя: {week_total} (Δ {d_week}%) 📅",
 				f"- Месяц: {month_total} (Δ {d_month}%) 📊",
 			]
-			# assistant live plain-text comment
-			stats_dwm = self.db.stats_day_week_month(tg, today)
-			month_rank = self.db.month_ranking(start_month, end_month)
-			assistant_prompt = (
-				"Дай краткий комментарий по динамике за сегодня/неделю/месяц в виде одного абзаца "
-				"(2–3 коротких предложения), без списков и нумерации, без жирного и эмодзи. "
-				"Если есть снижение — задай 1 уточняющий вопрос и предложи 1 конкретное действие. "
-				"Учитывай, что после сообщения сотрудник может перейти в /assistant. "
-				f"Данные: сегодня {today_total} (Δ {d_day}%), неделя {week_total} (Δ {d_week}%), месяц {month_total} (Δ {d_month}%)."
-			)
-			assistant_comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, assistant_prompt)
-			assistant_comment = assistant_comment.replace('\n', ' ').strip()
-			# final text
-			text = (
-				header + "\n".join(lines) + "\n"
-				+ f"Комментарий ассистента: {assistant_comment}\n"
-				+ "Продолжить: /assistant"
-			)
+			coach = self._coach_lines(today_by or {}, d_day, d_week, d_month)
+			text = header + "\n".join(lines) + "\n" + "\n".join(coach) + "\n" + "Обсудить с помощником: /assistant"
 			await self.push_func(tg, text)
 
 	def start(self) -> None:

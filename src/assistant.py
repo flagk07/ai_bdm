@@ -81,7 +81,7 @@ def _format_stats_reply(period_label: str, total: int, by_product: Dict[str, int
 	items = [(p, c) for p, c in by_product.items() if c > 0]
 	items.sort(key=lambda x: x[1], reverse=True)
 	products_str = ", ".join([f"{p}:{c}" for p, c in items]) if items else "нет"
-	leaders_str = ", ".join([f"{r['agent_name']}:{r['total']}" for r in leaders[:3]]) if leaders else "нет"
+	leaders_str = ", ".join([f"{r['agent_name']}:{r['total']}]" for r in leaders[:3]]) if leaders else "нет"
 	return (
 		f"1. Период: {period_label} 📅\n"
 		f"2. Итого попыток: {total} 🎯\n"
@@ -113,8 +113,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "assistant", sanitize_text(redirect), off_topic=False)
 		return redirect
 
-	# Period data
+	# Period data + plans
 	period_stats = db.stats_period(tg_id, start, end)
+	plan_info = db.compute_plan_breakdown(tg_id, today)
 	group_rank = db.group_ranking_period(start, end)
 
 	# Direct stats reply with emojis if requested
@@ -130,8 +131,11 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	notes_preview = "\n".join([f"{i+1}. {n['content_sanitized']}" for i, n in enumerate(notes)]) if notes else "—"
 
 	# Compose messages for model
-	stats_line = f"{period_label}: всего {period_stats['total']}; по продуктам {period_stats['by_product']}"
-	best = ", ".join([f"{r['agent_name']}:{r['total']}" for r in group_rank[:2]]) if group_rank else "нет данных"
+	stats_line = (
+		f"{period_label}: всего {period_stats['total']}; по продуктам {period_stats['by_product']}; "
+		f"план день/неделя/месяц {plan_info['plan_day']}/{plan_info['plan_week']}/{plan_info['plan_month']}; RR {plan_info['rr_month']}"
+	)
+	best = ", ".join([f"{r['agent_name']}:{r['total']}]" for r in group_rank[:2]]) if group_rank else "нет данных"
 	group_line = f"Лидеры группы за {period_label}: {best}"
 	messages: List[Dict[str, str]] = []
 	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line, group_line, notes_preview)})

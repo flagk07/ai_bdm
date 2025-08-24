@@ -62,6 +62,16 @@ BEGIN
 	END IF;
 END$$;
 
+-- Sales plans per agent per month
+create table if not exists sales_plans (
+  tg_id bigint not null references employees(tg_id) on delete cascade,
+  year int not null,
+  month int not null check (month between 1 and 12),
+  plan_month int not null check (plan_month >= 0) default 200,
+  created_at timestamptz not null default now(),
+  primary key (tg_id, year, month)
+);
+
 -- Logs
 create table if not exists logs (
   id uuid primary key default gen_random_uuid(),
@@ -79,6 +89,7 @@ alter table attempts enable row level security;
 alter table notes enable row level security;
 alter table assistant_messages enable row level security;
 alter table logs enable row level security;
+alter table sales_plans enable row level security;
 
 -- Permissive policies for anon (for server-side bot only). Use service key in production.
 -- Recreate policies idempotently: drop then create
@@ -99,4 +110,8 @@ drop policy if exists anon_all_assistant_messages on assistant_messages;
 create policy anon_all_assistant_messages on assistant_messages for all using (true) with check (true);
 
 drop policy if exists anon_all_logs on logs;
-create policy anon_all_logs on logs for all using (true) with check (true); 
+create policy anon_all_logs on logs for all using (true) with check (true);
+
+-- Permissive policy for bot (anon)
+drop policy if exists anon_all_sales_plans on sales_plans;
+create policy anon_all_sales_plans on sales_plans for all using (true) with check (true); 
