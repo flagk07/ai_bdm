@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, Set, List
 
 from aiogram import Bot, Dispatcher, F
@@ -203,7 +203,11 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		else:
 			def _d(v: object) -> str:
 				s = str(v)
-				return s.split('T', 1)[0]
+				try:
+					dt = datetime.fromisoformat(s.replace('Z', '+00:00'))
+					return dt.strftime('%d.%m.%Y')
+				except Exception:
+					return s.split('T', 1)[0]
 			text = "\n\n".join([f"{_d(n['created_at'])}:\n{n['content_sanitized']}" for n in notes])
 			await call.message.answer(text)
 		await call.answer()
