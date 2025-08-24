@@ -92,6 +92,14 @@ class StatsScheduler:
 			name = r["agent_name"]
 			# current totals and breakdown for today
 			today_total, today_by = self.db._sum_attempts_query(tg, today, today)
+			# Guard: ensure today_total equals sum of breakdown
+			sum_by = sum((today_by or {}).values())
+			if sum_by != today_total:
+				try:
+					self.db.log(tg, "today_total_mismatch", {"expected_total": today_total, "sum_by": sum_by, "by": today_by})
+				except Exception:
+					pass
+				today_total = sum_by
 			week_total, _ = self.db._sum_attempts_query(tg, start_week, end_week)
 			month_total, _ = self.db._sum_attempts_query(tg, start_month, end_month)
 			# previous totals
