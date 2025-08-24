@@ -199,7 +199,10 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		if not notes:
 			await call.message.answer("Комментариев нет")
 		else:
-			text = "\n\n".join([f"{n['created_at']}:\n{n['content_sanitized']}" for n in notes])
+			def _d(v: object) -> str:
+				s = str(v)
+				return s.split('T', 1)[0]
+			text = "\n\n".join([f"{_d(n['created_at'])}:\n{n['content_sanitized']}" for n in notes])
 			await call.message.answer(text)
 		await call.answer()
 
