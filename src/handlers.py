@@ -44,7 +44,8 @@ class MeetSession:
 def main_keyboard() -> ReplyKeyboardMarkup:
 	return ReplyKeyboardMarkup(keyboard=[
 		[KeyboardButton(text="Внести кросс"), KeyboardButton(text="Статистика")],
-		[KeyboardButton(text="Помощник"), KeyboardButton(text="Заметки")],
+		[KeyboardButton(text="Внести встречу"), KeyboardButton(text="Заметки")],
+		[KeyboardButton(text="Помощник")],
 	], resize_keyboard=True)
 
 
@@ -111,6 +112,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.message(Command("result"))
 	async def enter_results(message: Message, state: FSMContext) -> None:
 		user_id = message.from_user.id
+		# Access already проверен ранее в /meet; здесь не дублируем, но для прямого вызова оставим мягкую проверку
 		if not db.is_allowed(user_id):
 			await message.answer("Доступ ограничен.")
 			return
@@ -211,8 +213,14 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 
 	@dp.callback_query(MeetStates.selecting, F.data == "meet_cross")
 	async def meet_to_cross(call: CallbackQuery, state: FSMContext) -> None:
+		user_id = call.from_user.id
+		if not db.is_allowed(user_id):
+			await call.message.answer("Доступ ограничен.")
+			await call.answer()
+			return
 		await state.clear()
-		await enter_results(call.message, state)  # reuse cross flow
+		# Reuse cross flow after access check
+		await enter_results(call.message, state)
 		await call.answer()
 
 	@dp.callback_query(MeetStates.selecting, F.data == "meet_done")
@@ -226,6 +234,11 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			meet_id = db.create_meet(call.from_user.id, sess.product, date.today())
 			if not meet_id:
 				raise RuntimeError("meet not created")
+			# Log already inside create_meet; also reflect to logs table explicitly
+			try:
+				db.log(call.from_user.id, "meet_saved", {"meet_id": meet_id, "product": sess.product})
+			except Exception:
+				pass
 			try:
 				await call.message.edit_text("Результат сохранен")
 			except Exception:

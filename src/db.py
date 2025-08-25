@@ -168,24 +168,31 @@ class Database:
 		"""Create a meeting row and return meet.id (uuid as string)."""
 		day = d or date.today()
 		try:
-			res = self.client.table("meet").insert({
+			# Insert first (no select chaining to avoid client limitations)
+			self.client.table("meet").insert({
 				"tg_id": tg_id,
 				"product_code": product_code,
 				"for_date": day.isoformat(),
 			}).execute()
-			data = getattr(res, "data", None) or []
-			if data and isinstance(data, list) and data[0].get("id"):
-				meet_id = data[0]["id"]
+			# Then select the most recent matching row for this user/day/product
+			sel = (
+				self.client.table("meet")
+				.select("id")
+				.eq("tg_id", tg_id)
+				.eq("for_date", day.isoformat())
+				.eq("product_code", product_code)
+				.order("created_at", desc=True)
+				.limit(1)
+				.execute()
+			)
+			rows = getattr(sel, "data", None) or []
+			if rows:
+				meet_id = rows[0]["id"]
 				try:
 					self.log(tg_id, "meet_create", {"meet_id": meet_id, "product_code": product_code, "for_date": day.isoformat()})
 				except Exception:
 					pass
 				return str(meet_id)
-			# Fallback: select last created
-			sel = self.client.table("meet").select("id").eq("tg_id", tg_id).order("created_at", desc=True).limit(1).execute()
-			rows = getattr(sel, "data", None) or []
-			if rows:
-				return str(rows[0]["id"])
 			return None
 		except Exception as e:
 			try:
