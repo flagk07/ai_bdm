@@ -181,6 +181,23 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 				await call.message.edit_text("Результат сохранен")
 			except Exception:
 				await call.message.answer("Результат сохранен")
+			# Post-save summary: cross totals and optionally meetings totals
+			today = date.today()
+			# Cross totals
+			stats = db.stats_day_week_month(call.from_user.id, today)
+			cross_line = (
+				f"Кросс: День {int(stats['today']['total'])} | Неделя {int(stats['week']['total'])} | Месяц {int(stats['month']['total'])}"
+			)
+			await call.message.answer(cross_line)
+			# If came from /meet (we carry meet_id), also show meetings line
+			if meet_id:
+				start_week = today - timedelta(days=today.weekday())
+				start_month = today.replace(day=1)
+				m_day = db.meets_period_count(call.from_user.id, today, today)
+				m_week = db.meets_period_count(call.from_user.id, start_week, today)
+				m_month = db.meets_period_count(call.from_user.id, start_month, today)
+				meet_line = f"Встречи: День {m_day} | Неделя {m_week} | Месяц {m_month}"
+				await call.message.answer(meet_line)
 		except Exception as e:
 			db.log(call.from_user.id, "error", {"where": "done_results", "error": str(e)})
 			try:
@@ -189,11 +206,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 				await call.message.answer("Ошибка сохранения. Повторите позже.")
 		finally:
 			await state.clear()
-			stats = db.stats_day_week_month(call.from_user.id, date.today())
-			await call.message.answer(
-				f"День: {stats['today']['total']} | Неделя: {stats['week']['total']} | Месяц: {stats['month']['total']}",
-				reply_markup=main_keyboard(),
-			)
+			await call.message.answer("Меню", reply_markup=main_keyboard())
 			await call.answer()
 
 	# Meet flow
@@ -271,6 +284,15 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 				await call.message.edit_text("Результат сохранен")
 			except Exception:
 				await call.message.answer("Результат сохранен")
+			# Post-save summary: meetings totals
+			today = date.today()
+			start_week = today - timedelta(days=today.weekday())
+			start_month = today.replace(day=1)
+			m_day = db.meets_period_count(call.from_user.id, today, today)
+			m_week = db.meets_period_count(call.from_user.id, start_week, today)
+			m_month = db.meets_period_count(call.from_user.id, start_month, today)
+			meet_line = f"Встречи: День {m_day} | Неделя {m_week} | Месяц {m_month}"
+			await call.message.answer(meet_line)
 		except Exception as e:
 			db.log(call.from_user.id, "error", {"where": "meet_done", "error": str(e)})
 			try:
