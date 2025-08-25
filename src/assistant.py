@@ -8,6 +8,7 @@ from openai import OpenAI
 from .config import get_settings
 from .pii import sanitize_text, sanitize_text_assistant_output
 from .db import Database
+import re
 
 
 ALLOWED_TOPICS_HINT = (
@@ -122,6 +123,22 @@ def _redirect_reply() -> str:
 	)
 
 
+def _normalize_bullets(text: str) -> str:
+	"""Ensure that numbered bullets '1.', '2.' start on new lines.
+	- Inserts a newline before any occurrence of '<digits>. ' that is not already at line start.
+	- Collapses extra spaces around newlines.
+	"""
+	if not text:
+		return ""
+	# Insert newline before N. where N=1..99 if not already at start of line
+	normalized = re.sub(r"(?<!^)\s+(?=\d{1,2}\.\s)", "\n", text)
+	# Ensure Windows/Mac newlines normalized
+	normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+	# Trim trailing spaces per line
+	normalized = "\n".join(line.rstrip() for line in normalized.split("\n"))
+	return normalized.strip()
+
+
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
 	settings = get_settings()
 	client = OpenAI(api_key=settings.openai_api_key)
@@ -183,6 +200,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	)
 	answer = resp.choices[0].message.content or ""
 	answer_clean = sanitize_text_assistant_output(answer)
+	answer_clean = _normalize_bullets(answer_clean)
 
 	# Store
 	db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
