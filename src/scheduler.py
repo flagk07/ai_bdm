@@ -46,6 +46,15 @@ class StatsScheduler:
 		# Show explicit + only for positive values; zero stays as 0
 		return f"+{d}" if d > 0 else (f"{d}" if d < 0 else "0")
 
+	def _fmt1(self, val: float | int) -> str:
+		try:
+			v = float(val)
+			if abs(v - round(v)) < 1e-9:
+				return str(int(round(v)))
+			return f"{v:.1f}".replace('.', ',')
+		except Exception:
+			return str(val)
+
 	async def _send_daily(self) -> None:
 		today = date.today()
 		# get all employees
@@ -143,6 +152,23 @@ class StatsScheduler:
 			rr = int(plan.get('rr_month', 0))
 			plan_m = int(plan.get('plan_month', 0))
 			rr_pct = int(round(rr * 100 / plan_m)) if plan_m > 0 else 0
+			# completion percents (one decimal)
+			p_day = int(plan.get('plan_day', 0))
+			p_week = int(plan.get('plan_week', 0))
+			p_month = int(plan.get('plan_month', 0))
+			c_day = (today_total * 100 / p_day) if p_day > 0 else 0
+			c_week = (week_total * 100 / p_week) if p_week > 0 else 0
+			c_month = (month_total * 100 / p_month) if p_month > 0 else 0
+			# meetings and penetration
+			m_day = self.db.meets_period_count(tg, today, today)
+			m_week = self.db.meets_period_count(tg, start_week, end_week)
+			m_month = self.db.meets_period_count(tg, start_month, end_month)
+			linked_day = self.db.attempts_linked_period_count(tg, today, today)
+			linked_week = self.db.attempts_linked_period_count(tg, start_week, end_week)
+			linked_month = self.db.attempts_linked_period_count(tg, start_month, end_month)
+			pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
+			pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
+			pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
 			# format breakdown like "2КН, 3КСП"
 			items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
 			items.sort(key=lambda x: (-x[1], x[0]))
@@ -152,23 +178,23 @@ class StatsScheduler:
 			lines = []
 			# day line
 			if show_d_day:
-				lines.append(f"- Сегодня: {today_total} / план {plan['plan_day']} (Δ {self._format_delta(d_day)}%) 🎯")
+				lines.append(f"- Сегодня: {today_total} факт / {p_day} план / {self._fmt1(c_day)}% выполнение / {self._fmt1(pen_day)}% проникновение / Δ {self._format_delta(d_day)}% 🎯")
 			else:
-				lines.append(f"- Сегодня: {today_total} / план {plan['plan_day']} 🎯")
+				lines.append(f"- Сегодня: {today_total} факт / {p_day} план / {self._fmt1(c_day)}% выполнение / {self._fmt1(pen_day)}% проникновение 🎯")
 			# products
 			lines.append(f"- Сегодня по продуктам: {breakdown}")
 			# week line
 			if show_d_week:
-				lines.append(f"- Неделя: {week_total} / план {plan['plan_week']} (Δ {self._format_delta(d_week)}%) 📅")
+				lines.append(f"- Неделя: {week_total} факт / {p_week} план / {self._fmt1(c_week)}% выполнение / {self._fmt1(pen_week)}% проникновение / Δ {self._format_delta(d_week)}% 📅")
 			else:
-				lines.append(f"- Неделя: {week_total} / план {plan['plan_week']} 📅")
+				lines.append(f"- Неделя: {week_total} факт / {p_week} план / {self._fmt1(c_week)}% выполнение / {self._fmt1(pen_week)}% проникновение 📅")
 			# month line
 			if show_d_month:
-				lines.append(f"- Месяц: {month_total} / план {plan['plan_month']} (Δ {self._format_delta(d_month)}%) 📊")
+				lines.append(f"- Месяц: {month_total} факт / {p_month} план / {self._fmt1(c_month)}% выполнение / {self._fmt1(pen_month)}% проникновение / Δ {self._format_delta(d_month)}% 📊")
 			else:
-				lines.append(f"- Месяц: {month_total} / план {plan['plan_month']} 📊")
+				lines.append(f"- Месяц: {month_total} факт / {p_month} план / {self._fmt1(c_month)}% выполнение / {self._fmt1(pen_month)}% проникновение 📊")
 			# RR month
-			lines.append(f"- RR месяца: {rr} ({rr_pct}%)")
+			lines.append(f"- RR месяца: прогноз факта {rr} / {rr_pct}% прогноз выполнения")
 			text = header + "\n".join(lines) + "\n"
 			# Choose comment source: AI if enabled, else deterministic
 			if self._env_on(os.environ.get("AI_SUMMARY")):
