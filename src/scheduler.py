@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, Tuple, List
+import re
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -45,6 +46,27 @@ class StatsScheduler:
 	def _format_delta(self, d: int) -> str:
 		# Show explicit + only for positive values; zero stays as 0
 		return f"+{d}" if d > 0 else (f"{d}" if d < 0 else "0")
+
+	def _shape_ai_comment(self, text: str) -> str:
+		"""Force required 1)/- bullet format and strip accidental stats blocks."""
+		if not text:
+			return ""
+		norm = text.replace("\r\n", "\n").replace("\r", "\n")
+		lines: List[str] = []
+		for raw in norm.split("\n"):
+			line = raw.strip()
+			if not line:
+				continue
+			# drop stats-like lines
+			if re.match(r"^\d+\.\s*(Период|Итого попыток|По продуктам|Лидеры группы)\b", line, re.IGNORECASE):
+				continue
+			# convert 1. -> 1)
+			line = re.sub(r"^(\d)\.\s+", r"\1) ", line)
+			lines.append(line)
+		text2 = "\n".join(lines)
+		# ensure '- ' bullets start on a new line
+		text2 = re.sub(r"(?<!^)\s+(?=-\s)", "\n", text2)
+		return text2.strip()
 
 	def _fmt1(self, val: float | int) -> str:
 		try:
@@ -221,26 +243,24 @@ class StatsScheduler:
 				except Exception:
 					prev_auto_text = None
 				ai_prompt = (
-					"Сделай поэтапный анализ и короткие рекомендации. Строго следуй порядку и помечай разделы цифрами:\n"
-					"1) Анализ текущих количественных результатов (встречи, кроссы, выполнение плана, проникновение).\n"
-					"2) Анализ предыдущих количественных результатов (вчера/пред. неделя/пред. месяц): встречи, кроссы, выполнение, проникновение.\n"
-					"3) Анализ своих прошлых комментариев (если были).\n"
-					"4) Анализ заметок сотрудника (если есть).\n"
-					"5) Анализ диалогов с помощником (только по делу).\n"
-					"6) Оценка влияния прошлых комментариев/диалогов/заметок на текущие цифры.\n"
-					"7) SMART-цели и конкретные шаги (1–3 пункта) на текущий период. Без воды, без повторения цифр из сводки.\n"
+					"[auto_summary] Строгий формат. Каждый пункт — с новой строки. Запрещено выводить блок статистики (Период/Итого/По продуктам/Лидеры). "
+					"Не сравнивай встречи с планом (план только для кроссов).\n"
+					"1) Анализ текущих количественных результатов (встречи, кроссы, выполнение плана если есть, проникновение).\n"
+					"2) Анализ предыдущих количественных результатов (вчера/пред. неделя/пред. месяц): встречи, кроссы, выполнение если есть, проникновение).\n"
+					"3) Оценка влияния прошлых рекомендаций/заметок/диалогов на текущие цифры (кратко).\n"
+					"4) SMART-цели и конкретные шаги (1–3 пункта). Без воды и без повторения цифр из сводки.\n"
 					"Данные для анализа (используй только как контекст, цифры не повторяй дословно):\n"
 					f"Текущие: день факт {today_total}, план {p_day}, вып. {self._fmt1(c_day)}%, проникн. {self._fmt1(pen_day)}%; "
 					f"неделя факт {week_total}, план {p_week}, вып. {self._fmt1(c_week)}%, проникн. {self._fmt1(pen_week)}%; "
 					f"месяц факт {month_total}, план {p_month}, вып. {self._fmt1(c_month)}%, проникн. {self._fmt1(pen_month)}%; RR {rr} ({rr_pct}%).\n"
 					f"Предыдущие: день факт {prev_day_total}, проникн. {self._fmt1(pen_prev_day)}%; "
 					f"неделя факт {prev_week_total}, проникн. {self._fmt1(pen_prev_week)}%; "
-					f"месяц факт {prev_month_total}, проникн. {self._fmt1(pen_prev_month)}%.\n"
+					f"месяц факт {prev_month_total}, проникн. {self._fmt1(pen_prev_month)}%..\n"
 					f"Прошлая авто-сводка: {prev_auto_text or '—' }\n"
-					"Стиль: деловой, по пунктам 1.,2.,3.; без эмодзи и жирного; максимум 6–10 коротких пунктов."
+					"Стиль: деловой; пункты 1), 2), 3), 4); подпункты начинай с '- '; без эмодзи и жирного; максимум 6–10 коротких строк."
 				)
 				comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, ai_prompt)
-				text += comment + "\n"
+				text += self._shape_ai_comment(comment) + "\n"
 			else:
 				coach = self._coach_lines(today_by or {}, d_day, d_week, d_month)
 				text += "\n".join(coach) + "\n"

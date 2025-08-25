@@ -81,6 +81,9 @@ def _parse_period(user_text: str, today: date) -> Tuple[date, date, str]:
 
 def _is_stats_request(text: str) -> bool:
 	low = text.lower()
+	# Ignore internal auto-summary prompts
+	if "[auto_summary]" in low:
+		return False
 	keys = ["статист", "итог", "лидер", "рейтинг", "сколько сделал", "по продуктам"]
 	return any(k in low for k in keys)
 
@@ -126,12 +129,15 @@ def _redirect_reply() -> str:
 def _normalize_bullets(text: str) -> str:
 	"""Ensure that numbered bullets '1.', '2.' start on new lines.
 	- Inserts a newline before any occurrence of '<digits>. ' that is not already at line start.
+	- Also ensures '-' sub-bullets start on a new line.
 	- Collapses extra spaces around newlines.
 	"""
 	if not text:
 		return ""
 	# Insert newline before N. where N=1..99 if not already at start of line
 	normalized = re.sub(r"(?<!^)\s+(?=\d{1,2}\.\s)", "\n", text)
+	# Insert newline before hyphen bullets "- " when not at line start
+	normalized = re.sub(r"(?<!^)\s+(?=-\s)", "\n", normalized)
 	# Ensure Windows/Mac newlines normalized
 	normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
 	# Trim trailing spaces per line
