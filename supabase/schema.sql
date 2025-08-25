@@ -62,6 +62,17 @@ BEGIN
 	END IF;
 END$$;
 
+-- Add auto flag to assistant_messages (idempotent)
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'assistant_messages' AND column_name = 'auto'
+	) THEN
+		ALTER TABLE assistant_messages ADD COLUMN auto boolean not null default false;
+	END IF;
+END$$;
+
 -- Sales plans per agent per month
 create table if not exists sales_plans (
   tg_id bigint not null references employees(tg_id) on delete cascade,

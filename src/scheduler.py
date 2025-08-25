@@ -184,6 +184,11 @@ class StatsScheduler:
 				coach = self._coach_lines(today_by or {}, d_day, d_week, d_month)
 				text += "\n".join(coach) + "\n"
 			text += "Обсудить с помощником: /assistant"
+			# Store auto-sent summary in assistant_messages (auto=true)
+			try:
+				self.db.add_assistant_message(tg, "assistant", text, off_topic=False, auto=True)
+			except Exception:
+				pass
 			await self.push_func(tg, text)
 
 	def start(self) -> None:

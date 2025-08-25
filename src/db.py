@@ -326,13 +326,13 @@ class Database:
 		res = self.client.table("notes").select("created_at, content_sanitized").eq("tg_id", tg_id).gte("created_at", datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc).isoformat()).lte("created_at", datetime.combine(end, datetime.max.time(), tzinfo=timezone.utc).isoformat()).order("created_at", desc=True).limit(limit).execute()
 		return getattr(res, "data", []) or []
 
-	def add_assistant_message(self, tg_id: int, role: str, content_sanitized: str, off_topic: bool = False) -> None:
+	def add_assistant_message(self, tg_id: int, role: str, content_sanitized: str, off_topic: bool = False, auto: bool = False) -> None:
 		# Force-sanitize before storing
 		clean = sanitize_text(content_sanitized)
-		self.client.table("assistant_messages").insert({"tg_id": tg_id, "role": role, "content_sanitized": clean, "off_topic": off_topic}).execute()
+		self.client.table("assistant_messages").insert({"tg_id": tg_id, "role": role, "content_sanitized": clean, "off_topic": off_topic, "auto": auto}).execute()
 
 	def get_assistant_messages(self, tg_id: int, limit: int = 20) -> List[Dict[str, Any]]:
-		res = self.client.table("assistant_messages").select("role, content_sanitized, off_topic").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
+		res = self.client.table("assistant_messages").select("role, content_sanitized, off_topic, auto").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
 		msgs = getattr(res, "data", []) or []
 		msgs.reverse()
 		return msgs 
