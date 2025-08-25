@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Dict, Set, List
+from typing import Any, Dict, Set, List, Optional
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -16,9 +16,14 @@ from .pii import sanitize_text
 from .assistant import get_assistant_reply
 
 PRODUCTS: List[str] = ["КН","КСП","ПУ","ДК","ИК","ИЗП","НС","Вклад","КН к ЗП"]
+DELIVERY_PRODUCTS: List[str] = ["ЗП","ДК","МК","ПУ","КН","ТС","Вклад","ИК","Эскроу","КК","Аккредитив"]
 
 
 class ResultStates(StatesGroup):
+	selecting = State()
+
+
+class MeetStates(StatesGroup):
 	selecting = State()
 
 
@@ -31,9 +36,14 @@ class ResultSession:
 	selected: Set[str]
 
 
+@dataclass
+class MeetSession:
+	product: Optional[str]
+
+
 def main_keyboard() -> ReplyKeyboardMarkup:
 	return ReplyKeyboardMarkup(keyboard=[
-		[KeyboardButton(text="Внести результат"), KeyboardButton(text="Статистика")],
+		[KeyboardButton(text="Внести кросс"), KeyboardButton(text="Статистика")],
 		[KeyboardButton(text="Помощник"), KeyboardButton(text="Заметки")],
 	], resize_keyboard=True)
 
@@ -58,6 +68,25 @@ def results_keyboard(selected: Set[str]) -> InlineKeyboardMarkup:
 	return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def meet_keyboard(selected: Optional[str]) -> InlineKeyboardMarkup:
+	buttons: List[List[InlineKeyboardButton]] = []
+	row: List[InlineKeyboardButton] = []
+	for idx, p in enumerate(DELIVERY_PRODUCTS):
+		mark = "✅ " if selected == p else ""
+		row.append(InlineKeyboardButton(text=f"{mark}{p}", callback_data=f"meet:{p}"))
+		if (idx + 1) % 2 == 0:
+			buttons.append(row)
+			row = []
+	if row:
+		buttons.append(row)
+	buttons.append([
+		InlineKeyboardButton(text="Готово", callback_data="meet_done"),
+		InlineKeyboardButton(text="Отмена", callback_data="meet_cancel"),
+		InlineKeyboardButton(text="Внести кросс", callback_data="meet_cross"),
+	])
+	return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bool = False) -> None:
 	@dp.message(CommandStart())
 	async def start_handler(message: Message) -> None:
@@ -77,7 +106,8 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	async def menu_handler(message: Message) -> None:
 		await message.answer("Меню", reply_markup=main_keyboard())
 
-	@dp.message(F.text == "Внести результат")
+	# Cross attempts flow
+	@dp.message(F.text == "Внести кросс")
 	@dp.message(Command("result"))
 	async def enter_results(message: Message, state: FSMContext) -> None:
 		user_id = message.from_user.id
@@ -149,6 +179,67 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			)
 			await call.answer()
 
+	# Meet flow
+	@dp.message(Command("meet"))
+	async def meet_start(message: Message, state: FSMContext) -> None:
+		user_id = message.from_user.id
+		if not db.is_allowed(user_id):
+			await message.answer("Доступ ограничен.")
+			return
+		await state.set_state(MeetStates.selecting)
+		await state.update_data(meet=MeetSession(product=None).__dict__)
+		await message.answer("Выберите продукт доставки (один на сессию)", reply_markup=meet_keyboard(None))
+
+	@dp.callback_query(MeetStates.selecting, F.data.startswith("meet:"))
+	async def meet_pick(call: CallbackQuery, state: FSMContext) -> None:
+		p = call.data.split(":",1)[1]
+		data = await state.get_data()
+		sess = MeetSession(**data.get("meet"))
+		sess.product = p
+		await state.update_data(meet=sess.__dict__)
+		await call.message.edit_reply_markup(reply_markup=meet_keyboard(sess.product))
+		await call.answer()
+
+	@dp.callback_query(MeetStates.selecting, F.data == "meet_cancel")
+	async def meet_cancel(call: CallbackQuery, state: FSMContext) -> None:
+		await state.clear()
+		try:
+			await call.message.edit_text("Результат не сохранен")
+		except Exception:
+			await call.message.answer("Результат не сохранен")
+		await call.answer()
+
+	@dp.callback_query(MeetStates.selecting, F.data == "meet_cross")
+	async def meet_to_cross(call: CallbackQuery, state: FSMContext) -> None:
+		await state.clear()
+		await enter_results(call.message, state)  # reuse cross flow
+		await call.answer()
+
+	@dp.callback_query(MeetStates.selecting, F.data == "meet_done")
+	async def meet_done(call: CallbackQuery, state: FSMContext) -> None:
+		data = await state.get_data()
+		sess = MeetSession(**data.get("meet"))
+		if not sess.product:
+			await call.answer("Выберите продукт", show_alert=True)
+			return
+		try:
+			meet_id = db.create_meet(call.from_user.id, sess.product, date.today())
+			if not meet_id:
+				raise RuntimeError("meet not created")
+			try:
+				await call.message.edit_text("Результат сохранен")
+			except Exception:
+				await call.message.answer("Результат сохранен")
+		except Exception as e:
+			db.log(call.from_user.id, "error", {"where": "meet_done", "error": str(e)})
+			try:
+				await call.message.edit_text("Ошибка сохранения. Повторите позже.")
+			except Exception:
+				await call.message.answer("Ошибка сохранения. Повторите позже.")
+		finally:
+			await state.clear()
+			await call.answer()
+
 	@dp.message(F.text == "Статистика")
 	@dp.message(Command("stats"))
 	async def stats_handler(message: Message) -> None:
@@ -193,6 +284,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		]
 		await message.answer("\n".join(lines), reply_markup=main_keyboard())
 
+	# Notes and Assistant handlers below remain unchanged
 	@dp.message(F.text == "Заметки")
 	@dp.message(Command("notes"))
 	async def notes_menu(message: Message) -> None:

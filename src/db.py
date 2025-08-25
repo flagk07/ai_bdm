@@ -164,7 +164,37 @@ class Database:
 		ranking.sort(key=lambda x: x[2], reverse=True)
 		return [{"tg_id": tg, "agent_name": name, "total": total} for tg, name, total in ranking]
 
-	def save_attempts(self, tg_id: int, attempts: Dict[str, int], for_date: date) -> None:
+	def create_meet(self, tg_id: int, product_code: str, d: Optional[date] = None) -> Optional[str]:
+		"""Create a meeting row and return meet.id (uuid as string)."""
+		day = d or date.today()
+		try:
+			res = self.client.table("meet").insert({
+				"tg_id": tg_id,
+				"product_code": product_code,
+				"for_date": day.isoformat(),
+			}).execute()
+			data = getattr(res, "data", None) or []
+			if data and isinstance(data, list) and data[0].get("id"):
+				meet_id = data[0]["id"]
+				try:
+					self.log(tg_id, "meet_create", {"meet_id": meet_id, "product_code": product_code, "for_date": day.isoformat()})
+				except Exception:
+					pass
+				return str(meet_id)
+			# Fallback: select last created
+			sel = self.client.table("meet").select("id").eq("tg_id", tg_id).order("created_at", desc=True).limit(1).execute()
+			rows = getattr(sel, "data", None) or []
+			if rows:
+				return str(rows[0]["id"])
+			return None
+		except Exception as e:
+			try:
+				self.log(tg_id, "db_error", {"where": "create_meet", "error": str(e)})
+			except Exception:
+				pass
+			return None
+
+	def save_attempts(self, tg_id: int, attempts: Dict[str, int], for_date: date, meet_id: Optional[str] = None) -> None:
 		# Ensure employee exists to satisfy FK
 		try:
 			self.client.table("employees").select("tg_id").eq("tg_id", tg_id).single().execute()
@@ -174,15 +204,22 @@ class Database:
 		for product_code, attempt_count in attempts.items():
 			if attempt_count <= 0:
 				continue
-			rows.append({
+			row: Dict[str, Any] = {
 				"tg_id": tg_id,
 				"product_code": product_code,
 				"attempt_count": attempt_count,
 				"for_date": for_date.isoformat(),
-			})
+			}
+			if meet_id:
+				row["meet_id"] = meet_id
+			rows.append(row)
 		if not rows:
 			return
 		self.client.table("attempts").insert(rows).execute()
+		try:
+			self.log(tg_id, "save_attempts", {"meet_id": meet_id, "rows": rows})
+		except Exception:
+			pass
 
 	def _sum_attempts_query(self, tg_id: int, start: date, end: date) -> Tuple[int, Dict[str, int]]:
 		res = self.client.table("attempts").select("product_code, attempt_count").eq("tg_id", tg_id).gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()

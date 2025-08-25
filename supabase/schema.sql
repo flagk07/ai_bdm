@@ -82,6 +82,27 @@ create table if not exists logs (
 );
 create index if not exists idx_logs_created on logs (created_at desc);
 
+-- Meet (client meetings by delivered product)
+create table if not exists meet (
+  id uuid primary key default gen_random_uuid(),
+  tg_id bigint not null references employees(tg_id) on delete cascade,
+  product_code text not null check (product_code in ('ЗП','ДК','МК','ПУ','КН','ТС','Вклад','ИК','Эскроу','КК','Аккредитив')),
+  for_date date not null default current_date,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_meet_tg_created on meet (tg_id, created_at desc);
+
+-- Add meet_id to attempts (idempotent)
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'attempts' AND column_name = 'meet_id'
+	) THEN
+		ALTER TABLE attempts ADD COLUMN meet_id uuid references meet(id) on delete set null;
+	END IF;
+END$$;
+
 -- RLS Policies (MVP: allow anon role to read/write). Adjust for production.
 alter table allowed_users enable row level security;
 alter table employees enable row level security;
@@ -90,6 +111,7 @@ alter table notes enable row level security;
 alter table assistant_messages enable row level security;
 alter table logs enable row level security;
 alter table sales_plans enable row level security;
+alter table meet enable row level security;
 
 -- Permissive policies for anon (for server-side bot only). Use service key in production.
 -- Recreate policies idempotently: drop then create
@@ -114,4 +136,7 @@ create policy anon_all_logs on logs for all using (true) with check (true);
 
 -- Permissive policy for bot (anon)
 drop policy if exists anon_all_sales_plans on sales_plans;
-create policy anon_all_sales_plans on sales_plans for all using (true) with check (true); 
+create policy anon_all_sales_plans on sales_plans for all using (true) with check (true);
+
+drop policy if exists anon_all_meet on meet;
+create policy anon_all_meet on meet for all using (true) with check (true); 
