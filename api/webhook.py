@@ -53,6 +53,16 @@ async def _set_commands() -> None:
 				db.log(None, "set_webhook", {"url": url, "ok": True})
 			except Exception:
 				pass
+			# Verify and log webhook info
+			try:
+				info = await bot.get_webhook_info()
+				payload = {"url": info.url, "pending": info.pending_update_count}
+				try:
+					db.log(None, "webhook_info", payload)
+				except Exception:
+					pass
+			except Exception:
+				pass
 	except Exception as e:
 		try:
 			db.log(None, "set_webhook_error", {"error": str(e)})
@@ -73,6 +83,17 @@ async def root() -> JSONResponse:
 @app.get("/health")
 async def health_plain() -> JSONResponse:
 	return JSONResponse({"ok": True})
+
+
+@app.get("/api/health")
+async def health_api() -> JSONResponse:
+	info = None
+	try:
+		wi = await bot.get_webhook_info()
+		info = {"url": wi.url, "pending": wi.pending_update_count}
+	except Exception as e:
+		info = {"error": str(e)}
+	return JSONResponse({"ok": True, "webhook": info})
 
 
 @app.post("/webhook")
