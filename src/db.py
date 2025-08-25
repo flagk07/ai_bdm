@@ -168,6 +168,11 @@ class Database:
 		"""Create a meeting row and return meet.id (uuid as string)."""
 		day = d or date.today()
 		try:
+			# Ensure employee exists (FK)
+			try:
+				self.client.table("employees").select("tg_id").eq("tg_id", tg_id).single().execute()
+			except Exception:
+				self.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").execute()
 			# Insert first (no select chaining to avoid client limitations)
 			self.client.table("meet").insert({
 				"tg_id": tg_id,

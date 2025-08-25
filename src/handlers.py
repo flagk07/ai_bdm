@@ -226,8 +226,11 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			await call.message.answer("Временная ошибка базы. Повторите позже.", reply_markup=main_keyboard())
 			await call.answer()
 			return
-		# Create meet immediately and carry meet_id into cross flow
-		meet_id = db.create_meet(user_id, "—", date.today())  # продукт доставки мог быть не выбран → сохраняем без продукта
+		# Create meet immediately (use chosen delivery product if selected)
+		data = await state.get_data()
+		sess = data.get("meet") or {}
+		prod = sess.get("product") or "—"
+		meet_id = db.create_meet(user_id, prod, date.today())
 		await state.clear()
 		await state.set_state(ResultStates.selecting)
 		await state.update_data(session=ResultSession(selected=set()).__dict__, meet_id=meet_id)
