@@ -219,9 +219,16 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			await call.message.answer("Доступ ограничен.")
 			await call.answer()
 			return
+		# Start cross flow explicitly for the user (message.from_user in callbacks is the bot)
 		await state.clear()
-		# Reuse cross flow after access check
-		await enter_results(call.message, state)
+		emp = db.get_or_register_employee(user_id)
+		if not emp:
+			await call.message.answer("Временная ошибка базы. Повторите позже.", reply_markup=main_keyboard())
+			await call.answer()
+			return
+		await state.set_state(ResultStates.selecting)
+		await state.update_data(session=ResultSession(selected=set()).__dict__)
+		await bot.send_message(user_id, "Отметьте продукты (чек-боксы)", reply_markup=results_keyboard(set()))
 		await call.answer()
 
 	@dp.callback_query(MeetStates.selecting, F.data == "meet_done")
