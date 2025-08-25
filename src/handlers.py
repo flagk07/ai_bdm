@@ -88,6 +88,20 @@ def meet_keyboard(selected: Optional[str]) -> InlineKeyboardMarkup:
 	return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _fmt1(val: float | int) -> str:
+	"""Format with at most one decimal and comma as separator.
+	- If whole number → without decimals (e.g., 30)
+	- Else → one decimal (e.g., 29,3)
+	"""
+	try:
+		v = float(val)
+		if abs(v - round(v)) < 1e-9:
+			return str(int(round(v)))
+		return f"{v:.1f}".replace('.', ',')
+	except Exception:
+		return str(val)
+
+
 def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bool = False) -> None:
 	@dp.message(CommandStart())
 	async def start_handler(message: Message) -> None:
@@ -310,20 +324,20 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		linked_day = db.attempts_linked_period_count(user_id, start_day, end_day)
 		linked_week = db.attempts_linked_period_count(user_id, start_week, today)
 		linked_month = db.attempts_linked_period_count(user_id, start_month, today)
-		pen_day = round((linked_day * 100 / m_day), 1) if m_day > 0 else 0
-		pen_week = round((linked_week * 100 / m_week), 1) if m_week > 0 else 0
-		pen_month = round((linked_month * 100 / m_month), 1) if m_month > 0 else 0
+		pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
+		pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
+		pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
 		lines = []
 		lines.append(f"🏆 Агент: {emp.agent_name} — место за месяц: {pos if pos else '—'}")
 		lines.append("1. Сегодня:")
 		lines.append(f"- кросс продажи: {day_total} факт / {p_day} план / {perc_day}% выполнение ")
-		lines.append(f"- встречи: {m_day} проведено / {pen_day}% проникновение кросс-продаж")
+		lines.append(f"- встречи: {m_day} проведено / {_fmt1(pen_day)}% проникновение кросс-продаж")
 		lines.append("2. Неделя:")
 		lines.append(f"- кросс продажи: {week_total} факт / {p_week} план / {perc_week}% выполнение ")
-		lines.append(f"- встречи: {m_week} проведено / {pen_week}% проникновение кросс-продаж")
+		lines.append(f"- встречи: {m_week} проведено / {_fmt1(pen_week)}% проникновение кросс-продаж")
 		lines.append("3. Месяц:")
 		lines.append(f"- кросс продажи: {month_total} факт / {p_month} план / {perc_month}% выполнение ")
-		lines.append(f"- встречи: {m_month} проведено / {pen_month}% проникновение кросс-продаж")
+		lines.append(f"- встречи: {m_month} проведено / {_fmt1(pen_month)}% проникновение кросс-продаж")
 		lines.append(f"4. RR месяца по кросс-продажам: {rr} прогноз факта / {rr_pct}% прогноз выполнения 📈")
 		lines.append(f"🥇 Топ-2 сегодня: {top_str}")
 		lines.append(f"🧱 Антилидеры: {bottom_str}")
