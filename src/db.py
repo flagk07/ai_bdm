@@ -80,9 +80,10 @@ class Database:
 			row = getattr(res, "data", None)
 			if row:
 				return Employee(tg_id=int(row["tg_id"]), agent_name=row["agent_name"], active=bool(row.get("active", True)))
-			# Upsert if missing (idempotent)
-			created = self.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").select("tg_id, agent_name, active").maybe_single().execute()
-			row2 = getattr(created, "data", None)
+			# Upsert if missing (idempotent) — execute first, then select separately (avoid chaining .select on upsert)
+			self.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").execute()
+			sel_after_upsert = self.client.table("employees").select("tg_id, agent_name, active").eq("tg_id", tg_id).maybe_single().execute()
+			row2 = getattr(sel_after_upsert, "data", None)
 			if row2:
 				return Employee(tg_id=int(row2["tg_id"]), agent_name=row2["agent_name"], active=bool(row2.get("active", True)))
 			# Fallback: explicit insert then select
