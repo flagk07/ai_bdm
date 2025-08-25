@@ -182,6 +182,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			await call.answer()
 
 	# Meet flow
+	@dp.message(F.text == "Внести встречу")
 	@dp.message(Command("meet"))
 	async def meet_start(message: Message, state: FSMContext) -> None:
 		user_id = message.from_user.id
