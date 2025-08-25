@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from openai import OpenAI
 
 from .config import get_settings
-from .pii import sanitize_text
+from .pii import sanitize_text, sanitize_text_assistant_output
 from .db import Database
 
 
@@ -141,6 +141,10 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# Period data + plans
 	period_stats = db.stats_period(tg_id, start, end)
 	plan_info = db.compute_plan_breakdown(tg_id, today)
+	# previous period for comparison
+	prev_start = start - (end - start) - timedelta(days=1)
+	prev_end = start - timedelta(days=1)
+	prev_stats = db.stats_period(tg_id, prev_start, prev_end)
 	group_rank = db.group_ranking_period(start, end)
 
 	# Direct stats reply with emojis if requested
@@ -160,10 +164,11 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		f"{period_label}: всего {period_stats['total']}; по продуктам {period_stats['by_product']}; "
 		f"план день/неделя/месяц {plan_info['plan_day']}/{plan_info['plan_week']}/{plan_info['plan_month']}; RR {plan_info['rr_month']}"
 	)
+	prev_line = f"Предыдущий период: всего {prev_stats['total']}; по продуктам {prev_stats['by_product']}"
 	best = ", ".join([f"{r['agent_name']}:{r['total']}]" for r in group_rank[:2]]) if group_rank else "нет данных"
 	group_line = f"Лидеры группы за {period_label}: {best}"
 	messages: List[Dict[str, str]] = []
-	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line, group_line, notes_preview)})
+	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line + "; " + prev_line, group_line, notes_preview)})
 	# Keep last chat history minimal to avoid polluting topic; include last 10
 	history = db.get_assistant_messages(tg_id, limit=10)
 	for m in history:
@@ -177,7 +182,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		max_tokens=350,
 	)
 	answer = resp.choices[0].message.content or ""
-	answer_clean = sanitize_text(answer)
+	answer_clean = sanitize_text_assistant_output(answer)
 
 	# Store
 	db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)

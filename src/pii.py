@@ -55,4 +55,32 @@ def sanitize_text(text: Optional[str]) -> str:
 	clean = FIO_STRICT_RE.sub("[name]", clean)
 	# Collapse whitespace
 	clean = re.sub(r"\s{2,}", " ", clean).strip()
+	return clean
+
+
+def sanitize_text_assistant_output(text: Optional[str]) -> str:
+	"""Less aggressive sanitizer for assistant replies: masks only clear PII, preserves numeric KPIs.
+	- Keeps EMAIL, mentions, DOB, PASSPORT, SNILS, INN, CARD.
+	- Masks clear phone numbers (7+ digits/with separators).
+	- Does NOT apply MASKED_DIGITS_RE / NUM_SEQ_RE / MIXED_PHONE_LIKE_RE to avoid false positives on metrics.
+	- Keeps strict FIO masking.
+	"""
+	if not text:
+		return ""
+	clean = str(text)
+	# Emails, mentions
+	clean = EMAIL_RE.sub("[email]", clean)
+	clean = TG_MENTION_RE.sub("[mention]", clean)
+	# Specific identifiers
+	clean = DOB_RE.sub("[date]", clean)
+	clean = PASSPORT_RE.sub("[passport]", clean)
+	clean = SNILS_RE.sub("[snils]", clean)
+	clean = INN_RE.sub("[inn]", clean)
+	clean = CARD_RE.sub("[number]", clean)
+	# Clear phones only
+	clean = PHONE_RE.sub("[phone]", clean)
+	# Names (strict FIO only)
+	clean = FIO_STRICT_RE.sub("[name]", clean)
+	# Collapse whitespace
+	clean = re.sub(r"\s{2,}", " ", clean).strip()
 	return clean 
