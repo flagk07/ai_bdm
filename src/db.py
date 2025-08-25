@@ -148,6 +148,22 @@ class Database:
 		total, by_product = self._sum_attempts_query(tg_id, start, end)
 		return {"total": total, "by_product": by_product}
 
+	def meets_period_count(self, tg_id: int, start: date, end: date) -> int:
+		try:
+			res = self.client.table("meet").select("id").eq("tg_id", tg_id).gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
+			rows = getattr(res, "data", []) or []
+			return len(rows)
+		except Exception:
+			return 0
+
+	def attempts_linked_period_count(self, tg_id: int, start: date, end: date) -> int:
+		try:
+			res = self.client.table("attempts").select("id, meet_id, for_date").eq("tg_id", tg_id).gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
+			rows = getattr(res, "data", []) or []
+			return sum(1 for r in rows if r.get("meet_id"))
+		except Exception:
+			return 0
+
 	def group_ranking_period(self, start: date, end: date) -> List[Dict[str, Any]]:
 		res = self.client.table("attempts").select("tg_id, attempt_count").gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
 		sums: Dict[int, int] = {}
