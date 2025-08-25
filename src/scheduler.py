@@ -140,6 +140,9 @@ class StatsScheduler:
 				show_d_month = created_at_date <= end_prev_m
 			# plans and RR
 			plan = self.db.compute_plan_breakdown(tg, today)
+			rr = int(plan.get('rr_month', 0))
+			plan_m = int(plan.get('plan_month', 0))
+			rr_pct = int(round(rr * 100 / plan_m)) if plan_m > 0 else 0
 			# format breakdown like "2КН, 3КСП"
 			items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
 			items.sort(key=lambda x: (-x[1], x[0]))
@@ -165,7 +168,7 @@ class StatsScheduler:
 			else:
 				lines.append(f"- Месяц: {month_total} / план {plan['plan_month']} 📊")
 			# RR month
-			lines.append(f"- RR месяца: {plan['rr_month']}")
+			lines.append(f"- RR месяца: {rr} ({rr_pct}%)")
 			text = header + "\n".join(lines) + "\n"
 			# Choose comment source: AI if enabled, else deterministic
 			if self._env_on(os.environ.get("AI_SUMMARY")):
