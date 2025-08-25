@@ -78,14 +78,29 @@ class Database:
 			# Try get existing
 			res = self.client.table("employees").select("tg_id, agent_name, active").eq("tg_id", tg_id).maybe_single().execute()
 			row = getattr(res, "data", None)
-			if not row:
-				# Create if missing (idempotent)
-				created = self.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").select("tg_id, agent_name, active").maybe_single().execute()
-				row = getattr(created, "data", None)
-			if not row:
-				self.log(tg_id, "db_error", {"where": "get_or_register_employee", "error": "empty data after upsert"})
-				return None
-			return Employee(tg_id=int(row["tg_id"]), agent_name=row["agent_name"], active=bool(row.get("active", True)))
+			if row:
+				return Employee(tg_id=int(row["tg_id"]), agent_name=row["agent_name"], active=bool(row.get("active", True)))
+			# Upsert if missing (idempotent)
+			created = self.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").select("tg_id, agent_name, active").maybe_single().execute()
+			row2 = getattr(created, "data", None)
+			if row2:
+				return Employee(tg_id=int(row2["tg_id"]), agent_name=row2["agent_name"], active=bool(row2.get("active", True)))
+			# Fallback: explicit insert then select
+			try:
+				self.client.table("employees").insert({"tg_id": tg_id}).execute()
+			except Exception as e_ins:
+				try:
+					self.log(tg_id, "db_error", {"where": "employees_insert", "error": str(e_ins)})
+				except Exception:
+					pass
+				# continue to select even if insert said conflict
+			sel = self.client.table("employees").select("tg_id, agent_name, active").eq("tg_id", tg_id).maybe_single().execute()
+			row3 = getattr(sel, "data", None)
+			if row3:
+				return Employee(tg_id=int(row3["tg_id"]), agent_name=row3["agent_name"], active=bool(row3.get("active", True)))
+			# Give up
+			self.log(tg_id, "db_error", {"where": "get_or_register_employee", "error": "empty after upsert/insert"})
+			return None
 		except Exception as e:
 			try:
 				self.log(tg_id, "db_error", {"where": "get_or_register_employee", "error": str(e)})
