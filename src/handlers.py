@@ -155,12 +155,13 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	async def done_results(call: CallbackQuery, state: FSMContext) -> None:
 		data = await state.get_data()
 		selected = set(data.get("session", {}).get("selected", []))
+		meet_id = data.get("meet_id")
 		try:
 			emp = db.get_or_register_employee(call.from_user.id)
 			if not emp:
 				raise RuntimeError("employee missing")
 			attempts = {p: 1 for p in selected}
-			db.save_attempts(call.from_user.id, attempts, date.today())
+			db.save_attempts(call.from_user.id, attempts, date.today(), meet_id=meet_id)
 			db.log(call.from_user.id, "save_attempts", attempts)
 			try:
 				await call.message.edit_text("Результат сохранен")
@@ -220,14 +221,16 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			await call.answer()
 			return
 		# Start cross flow explicitly for the user (message.from_user in callbacks is the bot)
-		await state.clear()
 		emp = db.get_or_register_employee(user_id)
 		if not emp:
 			await call.message.answer("Временная ошибка базы. Повторите позже.", reply_markup=main_keyboard())
 			await call.answer()
 			return
+		# Create meet immediately and carry meet_id into cross flow
+		meet_id = db.create_meet(user_id, "—", date.today())  # продукт доставки мог быть не выбран → сохраняем без продукта
+		await state.clear()
 		await state.set_state(ResultStates.selecting)
-		await state.update_data(session=ResultSession(selected=set()).__dict__)
+		await state.update_data(session=ResultSession(selected=set()).__dict__, meet_id=meet_id)
 		await bot.send_message(user_id, "Отметьте продукты (чек-боксы)", reply_markup=results_keyboard(set()))
 		await call.answer()
 
