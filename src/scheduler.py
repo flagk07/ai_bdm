@@ -200,9 +200,44 @@ class StatsScheduler:
 			if self._env_on(os.environ.get("AI_SUMMARY")):
 				stats_dwm = self.db.stats_day_week_month(tg, today)
 				month_rank = self.db.month_ranking(start_month, end_month)
+				# Previous period meetings and penetration
+				m_prev_day = self.db.meets_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+				m_prev_week = self.db.meets_period_count(tg, start_prev_w, end_prev_w)
+				m_prev_month = self.db.meets_period_count(tg, start_prev_m, end_prev_m)
+				linked_prev_day = self.db.attempts_linked_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+				linked_prev_week = self.db.attempts_linked_period_count(tg, start_prev_w, end_prev_w)
+				linked_prev_month = self.db.attempts_linked_period_count(tg, start_prev_m, end_prev_m)
+				pen_prev_day = (linked_prev_day * 100 / m_prev_day) if m_prev_day > 0 else 0
+				pen_prev_week = (linked_prev_week * 100 / m_prev_week) if m_prev_week > 0 else 0
+				pen_prev_month = (linked_prev_month * 100 / m_prev_month) if m_prev_month > 0 else 0
+				# Find previous auto-summary text if any
+				prev_auto_text = None
+				try:
+					hist = self.db.get_assistant_messages(tg, limit=10)
+					for m in reversed(hist):
+						if m.get("auto") and m.get("role") == "assistant":
+							prev_auto_text = m.get("content_sanitized")
+							break
+				except Exception:
+					prev_auto_text = None
 				ai_prompt = (
-					"Дай 2–4 нумерованных пункта (1.,2.,3.,4.) без воды: краткая диагностика и конкретные шаги. "
-					"Не повторяй цифры из сводки, фокус — почему так и что сделать сегодня/на неделе. Без жирного и эмодзи."
+					"Сделай поэтапный анализ и короткие рекомендации. Строго следуй порядку и помечай разделы цифрами:\n"
+					"1) Анализ текущих количественных результатов (встречи, кроссы, выполнение плана, проникновение).\n"
+					"2) Анализ предыдущих количественных результатов (вчера/пред. неделя/пред. месяц): встречи, кроссы, выполнение, проникновение.\n"
+					"3) Анализ своих прошлых комментариев (если были).\n"
+					"4) Анализ заметок сотрудника (если есть).\n"
+					"5) Анализ диалогов с помощником (только по делу).\n"
+					"6) Оценка влияния прошлых комментариев/диалогов/заметок на текущие цифры.\n"
+					"7) SMART-цели и конкретные шаги (1–3 пункта) на текущий период. Без воды, без повторения цифр из сводки.\n"
+					"Данные для анализа (используй только как контекст, цифры не повторяй дословно):\n"
+					f"Текущие: день факт {today_total}, план {p_day}, вып. {self._fmt1(c_day)}%, проникн. {self._fmt1(pen_day)}%; "
+					f"неделя факт {week_total}, план {p_week}, вып. {self._fmt1(c_week)}%, проникн. {self._fmt1(pen_week)}%; "
+					f"месяц факт {month_total}, план {p_month}, вып. {self._fmt1(c_month)}%, проникн. {self._fmt1(pen_month)}%; RR {rr} ({rr_pct}%).\n"
+					f"Предыдущие: день факт {prev_day_total}, проникн. {self._fmt1(pen_prev_day)}%; "
+					f"неделя факт {prev_week_total}, проникн. {self._fmt1(pen_prev_week)}%; "
+					f"месяц факт {prev_month_total}, проникн. {self._fmt1(pen_prev_month)}%.\n"
+					f"Прошлая авто-сводка: {prev_auto_text or '—' }\n"
+					"Стиль: деловой, по пунктам 1.,2.,3.; без эмодзи и жирного; максимум 6–10 коротких пунктов."
 				)
 				comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, ai_prompt)
 				text += comment + "\n"
