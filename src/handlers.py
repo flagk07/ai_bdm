@@ -9,7 +9,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                          KeyboardButton, Message, ReplyKeyboardMarkup)
+                         KeyboardButton, Message, ReplyKeyboardMarkup)
 
 from .db import Database
 from .pii import sanitize_text
@@ -168,12 +168,26 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		top2, bottom2 = db.day_top_bottom(today)
 		top_str = ", ".join([r["agent_name"] for r in top2]) if top2 else "—"
 		bottom_str = ", ".join([r["agent_name"] for r in bottom2]) if bottom2 else "—"
+		# facts
+		day_total = int(stats['today']['total'])
+		week_total = int(stats['week']['total'])
+		month_total = int(stats['month']['total'])
+		# plans
+		p_day = int(plan['plan_day'])
+		p_week = int(plan['plan_week'])
+		p_month = int(plan['plan_month'])
+		# percents
+		perc_day = int(round(day_total * 100 / p_day)) if p_day > 0 else 0
+		perc_week = int(round(week_total * 100 / p_week)) if p_week > 0 else 0
+		perc_month = int(round(month_total * 100 / p_month)) if p_month > 0 else 0
+		rr = int(plan['rr_month'])
+		rr_pct = int(round(rr * 100 / p_month)) if p_month > 0 else 0
 		lines = [
 			f"1. Агент: {emp.agent_name} — место за месяц: {pos if pos else '—'} 🏆",
-			f"2. Сегодня: {stats['today']['total']} / план {plan['plan_day']} 🎯",
-			f"3. Неделя: {stats['week']['total']} / план {plan['plan_week']} 📅",
-			f"4. Месяц: {stats['month']['total']} / план {plan['plan_month']} 📊",
-			f"5. RR месяца: {plan['rr_month']} 📈",
+			f"2. Сегодня: {day_total} / план {p_day} / {perc_day}% выполнение 🎯",
+			f"3. Неделя: {week_total} / план {p_week} / {perc_week}% выполнение 📅",
+			f"4. Месяц: {month_total} / план {p_month} / {perc_month}% выполнение 📊",
+			f"5. RR месяца: {rr} / {rr_pct}% прогноз выполнения 📈",
 			f"6. Топ-2 сегодня: {top_str} 🥇",
 			f"7. Антилидеры: {bottom_str} 🧱",
 		]
