@@ -129,22 +129,75 @@ def _redirect_reply() -> str:
 
 
 def _normalize_bullets(text: str) -> str:
-	"""Ensure that numbered bullets '1.', '2.' start on new lines.
-	- Inserts a newline before any occurrence of '<digits>. ' that is not already at line start.
-	- Also ensures '-' sub-bullets start on a new line.
+	"""Ensure that numbered bullets '1)', '2)' (and legacy '1.') start on new lines.
+	- Inserts a newline before any occurrence of '<digits>) ' or '<digits>. ' not already at line start.
+	- Ensures '-' sub-bullets start on a new line.
+	- If a numbered item has exactly one immediate sub-bullet, inline it on the same line without '-'.
 	- Collapses extra spaces around newlines.
 	"""
 	if not text:
 		return ""
-	# Insert newline before N. where N=1..99 if not already at start of line
-	normalized = re.sub(r"(?<!^)\s+(?=\d{1,2}\.\s)", "\n", text)
+	# Normalize newlines first
+	normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+	# Insert newline before N) or N. where N=1..99 if not already at start of line
+	normalized = re.sub(r"(?<!^)\s+(?=\d{1,2}\)\s)", "\n", normalized)
+	normalized = re.sub(r"(?<!^)\s+(?=\d{1,2}\.\s)", "\n", normalized)
 	# Insert newline before hyphen bullets "- " when not at line start
 	normalized = re.sub(r"(?<!^)\s+(?=-\s)", "\n", normalized)
-	# Ensure Windows/Mac newlines normalized
-	normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
 	# Trim trailing spaces per line
-	normalized = "\n".join(line.rstrip() for line in normalized.split("\n"))
-	return normalized.strip()
+	lines = [ln.strip() for ln in normalized.split("\n") if ln.strip()]
+	# Inline single sub-bullet into its parent numbered item
+	result: List[str] = []
+	i = 0
+	while i < len(lines):
+		line = lines[i]
+		m_num = re.match(r"^(\d{1,2}\))\s+(.*)", line)
+		if not m_num:
+			# also support legacy '1.' pattern
+			m_num = re.match(r"^(\d{1,2})\.\s+(.*)", line)
+			if m_num:
+				# convert to 1) style
+				num = m_num.group(1) + ")"
+				main = m_num.group(2)
+				# check next line for single sub-bullet
+				if i + 1 < len(lines):
+					m_sub = re.match(r"^-\s+(.*)", lines[i + 1])
+					# ensure only one sub-bullet (next next starts new numbered or end)
+					is_single = False
+					if m_sub:
+						if (i + 2 >= len(lines)) or re.match(r"^(\d{1,2})[)\.]\s+", lines[i + 2]):
+							is_single = True
+					if m_sub and is_single:
+						result.append(f"{num} {main} {m_sub.group(1)}")
+						i += 2
+						continue
+					else:
+						result.append(f"{num} {main}")
+						i += 1
+						continue
+			else:
+				# not a numbered line, keep as-is
+				result.append(line)
+				i += 1
+				continue
+		# Here we have 1) pattern already
+		num = m_num.group(1)
+		main = m_num.group(2)
+		if i + 1 < len(lines):
+			m_sub2 = re.match(r"^-\s+(.*)", lines[i + 1])
+			is_single2 = False
+			if m_sub2:
+				if (i + 2 >= len(lines)) or re.match(r"^(\d{1,2})[)\.]\s+", lines[i + 2]):
+					is_single2 = True
+			if m_sub2 and is_single2:
+				result.append(f"{num} {main} {m_sub2.group(1)}")
+				i += 2
+				continue
+		# default: just append numbered line
+		result.append(f"{num} {main}")
+		i += 1
+	# Join back
+	return "\n".join(result).strip()
 
 
 def _rag_snippets(db: Database, product_hint: Optional[str], limit: int = 5) -> List[Dict[str, str]]:

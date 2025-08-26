@@ -48,25 +48,48 @@ class StatsScheduler:
 		return f"+{d}" if d > 0 else (f"{d}" if d < 0 else "0")
 
 	def _shape_ai_comment(self, text: str) -> str:
-		"""Force required 1)/- bullet format and strip accidental stats blocks."""
+		"""Force required 1)/- bullet format and strip accidental stats blocks.
+		- Numbered points (1), 2), ...) always on new lines; convert legacy '1.' to '1)'.
+		- Sub-bullets start with '- ' on new lines.
+		- If a numbered point has exactly one immediate sub-bullet, inline it without '-'.
+		"""
 		if not text:
 			return ""
 		norm = text.replace("\r\n", "\n").replace("\r", "\n")
+		# Ensure newlines before numbered bullets (both 1) and 1.)
+		norm = re.sub(r"(?<!^)\s+(?=\d{1,2}\)\s)", "\n", norm)
+		norm = re.sub(r"(?<!^)\s+(?=\d{1,2}\.\s)", "\n", norm)
+		# Ensure newlines before '- '
+		norm = re.sub(r"(?<!^)\s+(?=-\s)", "\n", norm)
+		# Split and clean
+		raw_lines = [ln.strip() for ln in norm.split("\n") if ln.strip()]
 		lines: List[str] = []
-		for raw in norm.split("\n"):
-			line = raw.strip()
-			if not line:
-				continue
+		for raw in raw_lines:
 			# drop stats-like lines
-			if re.match(r"^\d+\.\s*(Период|Итого попыток|По продуктам|Лидеры группы)\b", line, re.IGNORECASE):
+			if re.match(r"^\d+\.\s*(Период|Итого попыток|По продуктам|Лидеры группы)\b", raw, re.IGNORECASE):
 				continue
 			# convert 1. -> 1)
-			line = re.sub(r"^(\d)\.\s+", r"\1) ", line)
-			lines.append(line)
-		text2 = "\n".join(lines)
-		# ensure '- ' bullets start on a new line
-		text2 = re.sub(r"(?<!^)\s+(?=-\s)", "\n", text2)
-		return text2.strip()
+			raw = re.sub(r"^(\d{1,2})\.\s+", r"\1) ", raw)
+			lines.append(raw)
+		# Inline single sub-bullet
+		result: List[str] = []
+		i = 0
+		while i < len(lines):
+			line = lines[i]
+			m = re.match(r"^(\d{1,2}\))\s+(.*)", line)
+			if m and i + 1 < len(lines):
+				m_sub = re.match(r"^-\s+(.*)", lines[i + 1])
+				is_single = False
+				if m_sub:
+					if (i + 2 >= len(lines)) or re.match(r"^(\d{1,2})[)\.]\s+", lines[i + 2]):
+						is_single = True
+				if m_sub and is_single:
+					result.append(f"{m.group(1)} {m.group(2)} {m_sub.group(1)}")
+					i += 2
+					continue
+			result.append(line)
+			i += 1
+		return "\n".join(result).strip()
 
 	def _fmt1(self, val: float | int) -> str:
 		try:
