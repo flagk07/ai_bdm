@@ -9,6 +9,8 @@ from .config import get_settings
 from .pii import sanitize_text, sanitize_text_assistant_output
 from .db import Database
 import re
+import os
+from typing import Optional
 
 
 ALLOWED_TOPICS_HINT = (
@@ -145,6 +147,24 @@ def _normalize_bullets(text: str) -> str:
 	return normalized.strip()
 
 
+def _rag_snippets(db: Database, product_hint: Optional[str], limit: int = 5) -> List[Dict[str, str]]:
+	"""Fetch top RAG snippets from rag_docs by product_code or keyword in title/content.
+	Simple heuristic until pgvector is added: filter by product_code, else keyword in content.
+	"""
+	try:
+		if product_hint:
+			res = db.client.table("rag_docs").select("url,title,content,product_code").ilike("product_code", product_hint).order("fetched_at", desc=True).limit(limit).execute()
+			rows = getattr(res, "data", []) or []
+			if rows:
+				return [{"url": r.get("url",""), "title": r.get("title",""), "content": r.get("content",""), "product_code": r.get("product_code","") } for r in rows]
+		# fallback: recent docs
+		res2 = db.client.table("rag_docs").select("url,title,content,product_code").order("fetched_at", desc=True).limit(limit).execute()
+		rows2 = getattr(res2, "data", []) or []
+		return [{"url": r.get("url",""), "title": r.get("title",""), "content": r.get("content",""), "product_code": r.get("product_code","") } for r in rows2]
+	except Exception:
+		return []
+
+
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
 	settings = get_settings()
 	client = OpenAI(api_key=settings.openai_api_key)
@@ -188,10 +208,25 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		f"план день/неделя/месяц {plan_info['plan_day']}/{plan_info['plan_week']}/{plan_info['plan_month']}; RR {plan_info['rr_month']}"
 	)
 	prev_line = f"Предыдущий период: всего {prev_stats['total']}; по продуктам {prev_stats['by_product']}"
-	best = ", ".join([f"{r['agent_name']}:{r['total']}]" for r in group_rank[:2]]) if group_rank else "нет данных"
+	best = ", ".join([f"{r['agent_name']}:{r['total']} ]" for r in group_rank[:2]]) if group_rank else "нет данных"
 	group_line = f"Лидеры группы за {period_label}: {best}"
+	# RAG context (silent for user, no sources in text)
+	product_hint = None
+	for k in ["КН","кн","кредит налич","наличн","налич" ]:
+		if k in user_clean.lower():
+			product_hint = "КН"
+			break
+	rag_ctx = _rag_snippets(db, product_hint, limit=5)
+	ctx_text = "\n\n".join([s.get("content","")[:1200] for s in rag_ctx]) if rag_ctx else ""
+	try:
+		db.log(tg_id, "rag_ctx", {"count": len(rag_ctx), "items": [{"url": s.get("url"), "title": s.get("title") } for s in rag_ctx]})
+	except Exception:
+		pass
+
 	messages: List[Dict[str, str]] = []
 	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line + "; " + prev_line, group_line, notes_preview)})
+	if ctx_text:
+		messages.append({"role": "system", "content": "Справка по продукту (для точности, не цитируй источники):\n" + ctx_text})
 	# Keep last chat history minimal to avoid polluting topic; include last 10
 	history = db.get_assistant_messages(tg_id, limit=10)
 	for m in history:

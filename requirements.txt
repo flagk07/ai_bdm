@@ -6,4 +6,8 @@ APScheduler==3.10.4
 pytz==2024.1
 orjson==3.10.7
 fastapi==0.115.0
-uvicorn==0.30.6 
+uvicorn==0.30.6
+# RAG ingestion
+requests==2.32.3
+beautifulsoup4==4.12.3
+pypdf==5.0.1 

@@ -151,3 +151,23 @@ create policy anon_all_sales_plans on sales_plans for all using (true) with chec
 
 drop policy if exists anon_all_meet on meet;
 create policy anon_all_meet on meet for all using (true) with check (true); 
+
+-- RAG documents (public product materials)
+create table if not exists rag_docs (
+  id uuid primary key default gen_random_uuid(),
+  url text not null,
+  title text,
+  product_code text,
+  mime text,
+  fetched_at timestamptz not null default now(),
+  content text not null
+);
+create index if not exists idx_rag_docs_url on rag_docs (url);
+create index if not exists idx_rag_docs_product on rag_docs (product_code);
+create index if not exists idx_rag_docs_fetched on rag_docs (fetched_at desc);
+
+-- Enable RLS for rag_docs and permit anon for server-side bot (same as others)
+alter table rag_docs enable row level security;
+
+drop policy if exists anon_all_rag_docs on rag_docs;
+create policy anon_all_rag_docs on rag_docs for all using (true) with check (true); 

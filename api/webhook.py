@@ -12,6 +12,7 @@ from src.config import get_settings
 from src.db import Database
 from src.handlers import register_handlers
 from src.scheduler import StatsScheduler
+from src.rag import ingest_kn_docs
 
 app = FastAPI()
 
@@ -39,6 +40,15 @@ def _env_off(val: str | None) -> bool:
 async def _set_commands() -> None:
 	try:
 		await bot.set_my_commands([BotCommand(command="menu", description="Показать меню")])
+	except Exception:
+		pass
+	# Best-effort RAG ingest for KN
+	try:
+		cnt = ingest_kn_docs(db)
+		try:
+			db.log(None, "rag_ingest_kn", {"count": cnt})
+		except Exception:
+			pass
 	except Exception:
 		pass
 	# Auto-set Telegram webhook if WEBHOOK_URL or RENDER_EXTERNAL_URL provided
