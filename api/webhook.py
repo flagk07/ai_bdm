@@ -42,13 +42,18 @@ async def _set_commands() -> None:
 		await bot.set_my_commands([BotCommand(command="menu", description="Показать меню")])
 	except Exception:
 		pass
-	# Best-effort RAG ingest for KN
+	# Best-effort RAG ingest for KN in background (non-blocking)
 	try:
-		cnt = ingest_kn_docs(db)
-		try:
-			db.log(None, "rag_ingest_kn", {"count": cnt})
-		except Exception:
-			pass
+		async def _bg_ingest():
+			try:
+				cnt = await asyncio.to_thread(ingest_kn_docs, db)
+				try:
+					db.log(None, "rag_ingest_kn", {"count": cnt, "bg": True})
+				except Exception:
+					pass
+			except Exception:
+				pass
+		asyncio.create_task(_bg_ingest())
 	except Exception:
 		pass
 	# Auto-set Telegram webhook if WEBHOOK_URL or RENDER_EXTERNAL_URL provided
