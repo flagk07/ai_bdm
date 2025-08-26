@@ -166,6 +166,17 @@ create index if not exists idx_rag_docs_url on rag_docs (url);
 create index if not exists idx_rag_docs_product on rag_docs (product_code);
 create index if not exists idx_rag_docs_fetched on rag_docs (fetched_at desc);
 
+-- Ensure unique URL constraint for upsert
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.table_constraints
+		WHERE table_name = 'rag_docs' AND constraint_name = 'rag_docs_url_unique'
+	) THEN
+		ALTER TABLE rag_docs ADD CONSTRAINT rag_docs_url_unique UNIQUE (url);
+	END IF;
+END$$;
+
 -- Enable RLS for rag_docs and permit anon for server-side bot (same as others)
 alter table rag_docs enable row level security;
 

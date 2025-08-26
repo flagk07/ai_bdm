@@ -10,7 +10,8 @@ from .db import Database
 
 def _fetch_text_from_url(url: str) -> tuple[str, str, str]:
 	"""Return (mime, title, text). Supports HTML and PDF."""
-	r = requests.get(url, timeout=20)
+	h = {"User-Agent": "ai-bdm-rag/1.0"}
+	r = requests.get(url, timeout=20, headers=h)
 	r.raise_for_status()
 	ct = r.headers.get("Content-Type", "").lower()
 	if "pdf" in ct or url.lower().endswith(".pdf"):
@@ -21,14 +22,14 @@ def _fetch_text_from_url(url: str) -> tuple[str, str, str]:
 				texts.append(page.extract_text() or "")
 			except Exception:
 				pass
-		return ("application/pdf", url.split("/")[-1], "\n".join(texts))
+		return ("application/pdf", url.split("/")[-1], "\n".join(texts).strip())
 	# assume HTML
 	html = r.text
 	soup = BeautifulSoup(html, "html.parser")
 	title = soup.title.text.strip() if soup.title else url
 	for s in soup(["script", "style", "noscript"]):
 		s.extract()
-	text = " ".join(soup.get_text(" ").split())
+	text = " ".join(soup.get_text(" ").split()).strip()
 	return ("text/html", title, text)
 
 
@@ -47,14 +48,22 @@ def ingest_kn_docs(db: Database) -> int:
 			mime, title, text = _fetch_text_from_url(u)
 			if not text:
 				continue
-			# upsert by url
-			db.client.table("rag_docs").upsert({
+			row = {
 				"url": u,
 				"title": title,
 				"product_code": "КН",
 				"mime": mime,
 				"content": text,
-			}, on_conflict="url").execute()
+			}
+			try:
+				db.client.table("rag_docs").upsert(row, on_conflict="url").execute()
+			except Exception:
+				# fallback: delete+insert (in case on_conflict not supported)
+				try:
+					db.client.table("rag_docs").delete().eq("url", u).execute()
+					db.client.table("rag_docs").insert(row).execute()
+				except Exception:
+					continue
 			count += 1
 		except Exception:
 			continue
