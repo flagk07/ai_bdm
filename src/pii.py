@@ -58,10 +58,31 @@ def sanitize_text(text: Optional[str]) -> str:
 	return clean
 
 
+def _mask_clear_phones_assistant(text: str) -> str:
+	"""Mask only clear phone numbers in assistant output.
+	Criteria:
+	- At least 10 digits after removing separators (to avoid masking сумм типа 1 000 000).
+	- Not adjacent (±8 символов) к валютам/процентам: ₽, руб, %, млн, тыс, млрд.
+	"""
+	def repl(m: re.Match) -> str:
+		span_start, span_end = m.span()
+		digits_only = re.sub(r"\D", "", m.group(0))
+		if len(digits_only) < 10:
+			return m.group(0)
+		# Check context window
+		left = max(0, span_start - 8)
+		right = min(len(text), span_end + 8)
+		ctx = text[left:right].lower()
+		if any(tok in ctx for tok in ["руб", "₽", "%", "процент", "млн", "тыс", "млрд"]):
+			return m.group(0)
+		return "[phone]"
+	return PHONE_RE.sub(repl, text)
+
+
 def sanitize_text_assistant_output(text: Optional[str]) -> str:
 	"""Less aggressive sanitizer for assistant replies: masks only clear PII, preserves numeric KPIs.
 	- Keeps EMAIL, mentions, DOB, PASSPORT, SNILS, INN, CARD.
-	- Masks clear phone numbers (7+ digits/with separators).
+	- Masks clear phone numbers using stricter logic (>=10 digits; не рядом с валютой/%).
 	- Does NOT apply MASKED_DIGITS_RE / NUM_SEQ_RE / MIXED_PHONE_LIKE_RE to avoid false positives on metrics.
 	- Keeps strict FIO masking.
 	"""
@@ -77,8 +98,8 @@ def sanitize_text_assistant_output(text: Optional[str]) -> str:
 	clean = SNILS_RE.sub("[snils]", clean)
 	clean = INN_RE.sub("[inn]", clean)
 	clean = CARD_RE.sub("[number]", clean)
-	# Clear phones only
-	clean = PHONE_RE.sub("[phone]", clean)
+	# Clear phones only (stricter and currency-aware)
+	clean = _mask_clear_phones_assistant(clean)
 	# Names (strict FIO only)
 	clean = FIO_STRICT_RE.sub("[name]", clean)
 	# Collapse whitespace
