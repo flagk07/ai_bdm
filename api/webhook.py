@@ -111,6 +111,30 @@ async def health_api() -> JSONResponse:
 	return JSONResponse({"ok": True, "webhook": info})
 
 
+@app.post("/api/ingest_rag")
+@app.get("/api/ingest_rag")
+async def ingest_rag(request: Request) -> JSONResponse:
+	# Optional token protection
+	expected = os.environ.get("RAG_TOKEN") or os.environ.get("NOTIFY_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	# Run ingest in thread to avoid blocking loop too long
+	try:
+		cnt = await asyncio.to_thread(ingest_kn_docs, db)
+		# quick counts
+		try:
+			docs = db.client.table("rag_docs").select("id").execute()
+			chunks = db.client.table("rag_chunks").select("id").execute()
+			dc = len(getattr(docs, "data", []) or [])
+			cc = len(getattr(chunks, "data", []) or [])
+		except Exception:
+			dc, cc = None, None
+		return JSONResponse({"ok": True, "ingested": cnt, "docs": dc, "chunks": cc})
+	except Exception as e:
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request) -> JSONResponse:
 	payload = await request.json()
