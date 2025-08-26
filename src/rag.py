@@ -8,6 +8,10 @@ from datetime import datetime
 from .db import Database
 
 
+CHUNK_SIZE = 900
+CHUNK_OVERLAP = 150
+
+
 def _fetch_text_from_url(url: str) -> tuple[str, str, str]:
 	"""Return (mime, title, text). Supports HTML and PDF."""
 	h = {"User-Agent": "ai-bdm-rag/1.0"}
@@ -33,8 +37,23 @@ def _fetch_text_from_url(url: str) -> tuple[str, str, str]:
 	return ("text/html", title, text)
 
 
+def _chunk_text(text: str) -> list[str]:
+	chunks: list[str] = []
+	if not text:
+		return chunks
+	start = 0
+	n = len(text)
+	while start < n:
+		end = min(n, start + CHUNK_SIZE)
+		chunks.append(text[start:end])
+		if end == n:
+			break
+		start = max(end - CHUNK_OVERLAP, start + 1)
+	return chunks
+
+
 def ingest_kn_docs(db: Database) -> int:
-	"""Ingest KN (КН) documents into rag_docs. Returns count stored."""
+	"""Ingest KN (КН) documents into rag_docs and rag_chunks. Returns count stored."""
 	urls = [
 		"https://domrfbank.ru/loans/credit/?from=menu&type=link&product=credit",
 		"https://domrfbank.ru/upload/medialibrary/004/%D0%9E%D0%B1%D1%89%D0%B8%D0%B5%20%D1%83%D1%81%D0%BB%D0%BE%D0%B2%D0%B8%D1%8F%20%D0%BF%D1%80%D0%B5%D0%B4%D0%BE%D1%81%D1%82%D0%B0%D0%B2%D0%BB%D0%B5%D0%BD%D0%B8%D1%8F%20%D0%BA%D1%80%D0%B5%D0%B4%D0%B8%D1%82%D0%BE%D0%B2%20%D1%84%D0%B8%D0%B7.%20%D0%BB%D0%B8%D1%86%D0%B0%D0%BC_%D1%81%2014.02.2025.pdf",
@@ -55,15 +74,49 @@ def ingest_kn_docs(db: Database) -> int:
 				"mime": mime,
 				"content": text,
 			}
+			# upsert doc
+			doc_id = None
 			try:
-				db.client.table("rag_docs").upsert(row, on_conflict="url").execute()
+				ins = db.client.table("rag_docs").upsert(row, on_conflict="url").select("id").eq("url", u).maybe_single().execute()
+				doc = getattr(ins, "data", None)
+				if doc and doc.get("id"):
+					doc_id = doc["id"]
 			except Exception:
-				# fallback: delete+insert (in case on_conflict not supported)
+				# fallback: delete+insert then select
 				try:
 					db.client.table("rag_docs").delete().eq("url", u).execute()
 					db.client.table("rag_docs").insert(row).execute()
+					sel = db.client.table("rag_docs").select("id").eq("url", u).single().execute()
+					doc_id = getattr(sel, "data", {}).get("id")
 				except Exception:
 					continue
+			if not doc_id:
+				# try select existing
+				try:
+					sel2 = db.client.table("rag_docs").select("id").eq("url", u).single().execute()
+					doc_id = getattr(sel2, "data", {}).get("id")
+				except Exception:
+					pass
+			if not doc_id:
+				continue
+			# write chunks: clear previous chunks for this doc
+			try:
+				db.client.table("rag_chunks").delete().eq("doc_id", doc_id).execute()
+			except Exception:
+				pass
+			parts = _chunk_text(text)
+			bulk = []
+			for idx, part in enumerate(parts):
+				if not part.strip():
+					continue
+				bulk.append({
+					"doc_id": doc_id,
+					"product_code": "КН",
+					"chunk_index": idx,
+					"content": part,
+				})
+			if bulk:
+				db.client.table("rag_chunks").insert(bulk).execute()
 			count += 1
 		except Exception:
 			continue

@@ -182,3 +182,19 @@ alter table rag_docs enable row level security;
 
 drop policy if exists anon_all_rag_docs on rag_docs;
 create policy anon_all_rag_docs on rag_docs for all using (true) with check (true); 
+
+-- RAG chunks (normalized chunks for retrieval)
+create table if not exists rag_chunks (
+  id uuid primary key default gen_random_uuid(),
+  doc_id uuid not null references rag_docs(id) on delete cascade,
+  product_code text,
+  chunk_index int not null,
+  content text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_rag_chunks_doc on rag_chunks (doc_id, chunk_index);
+create index if not exists idx_rag_chunks_prod on rag_chunks (product_code);
+
+alter table rag_chunks enable row level security;
+drop policy if exists anon_all_rag_chunks on rag_chunks;
+create policy anon_all_rag_chunks on rag_chunks for all using (true) with check (true); 

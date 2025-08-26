@@ -153,16 +153,51 @@ def _rag_snippets(db: Database, product_hint: Optional[str], limit: int = 5) -> 
 	"""
 	try:
 		if product_hint:
-			res = db.client.table("rag_docs").select("url,title,content,product_code").ilike("product_code", product_hint).order("fetched_at", desc=True).limit(limit).execute()
+			res = db.client.table("rag_docs").select("id,url,title,content,product_code").ilike("product_code", product_hint).order("fetched_at", desc=True).limit(limit).execute()
 			rows = getattr(res, "data", []) or []
 			if rows:
-				return [{"url": r.get("url",""), "title": r.get("title",""), "content": r.get("content",""), "product_code": r.get("product_code","") } for r in rows]
+				return [{"url": r.get("url",""), "title": r.get("title",""), "content": r.get("content",""), "product_code": r.get("product_code",""), "id": r.get("id") } for r in rows]
 		# fallback: recent docs
-		res2 = db.client.table("rag_docs").select("url,title,content,product_code").order("fetched_at", desc=True).limit(limit).execute()
+		res2 = db.client.table("rag_docs").select("id,url,title,content,product_code").order("fetched_at", desc=True).limit(limit).execute()
 		rows2 = getattr(res2, "data", []) or []
-		return [{"url": r.get("url",""), "title": r.get("title",""), "content": r.get("content",""), "product_code": r.get("product_code","") } for r in rows2]
+		return [{"url": r.get("url",""), "title": r.get("title",""), "content": r.get("content",""), "product_code": r.get("product_code",""), "id": r.get("id") } for r in rows2]
 	except Exception:
 		return []
+
+
+def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit_docs: int = 3, limit_chunks: int = 5) -> List[str]:
+	"""Pick top chunks from rag_chunks for product. Score by naive keyword hits from query.
+	Falls back to rag_docs content if chunks absent.
+	"""
+	# keywords from query: words >=3 chars
+	words = [w for w in re.findall(r"[А-Яа-яA-Za-z0-9%]+", query.lower()) if len(w) >= 3]
+	ids: List[str] = []
+	try:
+		base = _rag_snippets(db, product_hint, limit=limit_docs)
+		ids = [r.get("id") for r in base if r.get("id")]
+	except Exception:
+		ids = []
+	chunks: List[Dict[str, str]] = []
+	if ids:
+		try:
+			res = db.client.table("rag_chunks").select("content, chunk_index, product_code, doc_id").in_("doc_id", ids).limit(200).execute()
+			rows = getattr(res, "data", []) or []
+			for r in rows:
+				chunks.append({"content": r.get("content",""), "chunk_index": int(r.get("chunk_index", 0))})
+		except Exception:
+			chunks = []
+	if not chunks:
+		# fallback: first 1200 of docs
+		docs = _rag_snippets(db, product_hint, limit=limit_docs)
+		return [d.get("content","")[:1200] for d in docs if d.get("content")][:limit_chunks]
+	# score chunks
+	scored: List[Tuple[int, str]] = []
+	for ch in chunks:
+		text = ch["content"].lower()
+		score = sum(text.count(w) for w in words) if words else 0
+		scored.append((score, ch["content"]))
+	scored.sort(key=lambda x: x[0], reverse=True)
+	return [c for _, c in scored[:limit_chunks]]
 
 
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
@@ -216,10 +251,10 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		if k in user_clean.lower():
 			product_hint = "КН"
 			break
-	rag_ctx = _rag_snippets(db, product_hint, limit=5)
-	ctx_text = "\n\n".join([s.get("content","")[:1200] for s in rag_ctx]) if rag_ctx else ""
+	rag_texts = _rag_top_chunks(db, product_hint, user_clean, limit_docs=3, limit_chunks=5)
+	ctx_text = "\n\n".join(rag_texts) if rag_texts else ""
 	try:
-		db.log(tg_id, "rag_ctx", {"count": len(rag_ctx), "items": [{"url": s.get("url"), "title": s.get("title") } for s in rag_ctx]})
+		db.log(tg_id, "rag_ctx", {"count": len(rag_texts) if rag_texts else 0})
 	except Exception:
 		pass
 
