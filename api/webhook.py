@@ -135,6 +135,42 @@ async def ingest_rag(request: Request) -> JSONResponse:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.post("/api/add_allowed")
+@app.get("/api/add_allowed")
+async def add_allowed(request: Request) -> JSONResponse:
+	# Reuse NOTIFY_TOKEN or RAG_TOKEN as admin token
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	# Accept tg_id from query or JSON body
+	tg_raw = request.query_params.get("tg_id")
+	if not tg_raw:
+		try:
+			payload = await request.json()
+			tg_raw = str(payload.get("tg_id")) if isinstance(payload, dict) else None
+		except Exception:
+			tg_raw = None
+	if not tg_raw:
+		return JSONResponse({"ok": False, "error": "missing tg_id"}, status_code=400)
+	try:
+		tg_id = int(tg_raw)
+	except Exception:
+		return JSONResponse({"ok": False, "error": "invalid tg_id"}, status_code=400)
+	# Upsert into allowed_users and pre-create employee row (idempotent)
+	try:
+		def _do() -> None:
+			db.client.table("allowed_users").upsert({"tg_id": tg_id, "active": True}, on_conflict="tg_id").execute()
+			# Optional: ensure employees row exists so /start proceeds smoothly
+			db.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").execute()
+		async def _run():
+			await asyncio.to_thread(_do)
+		await _run()
+		return JSONResponse({"ok": True, "tg_id": tg_id})
+	except Exception as e:
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request) -> JSONResponse:
 	payload = await request.json()
