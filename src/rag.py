@@ -6,10 +6,40 @@ from typing import Optional
 from datetime import datetime
 
 from .db import Database
+from openai import OpenAI
+from .config import get_settings
 
 
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
+
+CURRENCIES = {
+	"RUB": ["руб", "₽", "rub", "в руб", "руб.", "% год"],
+	"USD": ["usd", "$", "доллар"],
+	"EUR": ["eur", "€", "евро"],
+	"CNY": ["cny", "¥", "юан" , "юани"],
+}
+
+
+def _infer_currency(text: str) -> Optional[str]:
+	low = text.lower()
+	for code, keys in CURRENCIES.items():
+		for k in keys:
+			if k in low:
+				return code
+	return None
+
+
+def _embed_texts(texts: list[str]) -> list[Optional[list[float]]]:
+	"""Return list of embeddings (1536 dim) using OpenAI; None if failed."""
+	if not texts:
+		return []
+	try:
+		client = OpenAI(api_key=get_settings().openai_api_key)
+		resp = client.embeddings.create(model="text-embedding-3-small", input=texts)
+		return [item.embedding if getattr(item, "embedding", None) else None for item in resp.data]
+	except Exception:
+		return [None for _ in texts]
 
 
 def _fetch_text_from_url(url: str) -> tuple[str, str, str]:
@@ -105,16 +135,25 @@ def ingest_kn_docs(db: Database) -> int:
 			except Exception:
 				pass
 			parts = _chunk_text(text)
+			# prepare embeddings in batch
+			embeds = _embed_texts(parts)
 			bulk = []
 			for idx, part in enumerate(parts):
 				if not part.strip():
 					continue
-				bulk.append({
+				cur = _infer_currency(part)  # may be None
+				rowc = {
 					"doc_id": doc_id,
 					"product_code": "КН",
 					"chunk_index": idx,
 					"content": part,
-				})
+				}
+				if cur:
+					rowc["currency"] = cur
+				emb = embeds[idx] if idx < len(embeds) else None
+				if emb:
+					rowc["embedding"] = emb
+				bulk.append(rowc)
 			if bulk:
 				db.client.table("rag_chunks").insert(bulk).execute()
 			count += 1
@@ -176,16 +215,25 @@ def ingest_deposit_docs(db: Database) -> int:
 			except Exception:
 				pass
 			parts = _chunk_text(text)
+			# prepare embeddings in batch
+			embeds = _embed_texts(parts)
 			bulk = []
 			for idx, part in enumerate(parts):
 				if not part.strip():
 					continue
-				bulk.append({
+				cur = _infer_currency(part)
+				rowc = {
 					"doc_id": doc_id,
 					"product_code": "Вклад",
 					"chunk_index": idx,
 					"content": part,
-				})
+				}
+				if cur:
+					rowc["currency"] = cur
+				emb = embeds[idx] if idx < len(embeds) else None
+				if emb:
+					rowc["embedding"] = emb
+				bulk.append(rowc)
 			if bulk:
 				db.client.table("rag_chunks").insert(bulk).execute()
 			count += 1

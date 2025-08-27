@@ -201,6 +201,37 @@ def _normalize_bullets(text: str) -> str:
 	return "\n".join(result).strip()
 
 
+CURRENCY_HINTS = {
+	"RUB": ["руб", "₽", "rub", "в руб", "руб."],
+	"USD": ["usd", "$", "доллар"],
+	"EUR": ["eur", "€", "евро"],
+	"CNY": ["cny", "¥", "юан", "юани"],
+}
+
+def _detect_currency(query: str) -> Optional[str]:
+	low = query.lower()
+	for code, keys in CURRENCY_HINTS.items():
+		for k in keys:
+			if k in low:
+				return code
+	return None
+
+def _vector_top_chunks(db: Database, product: Optional[str], currency: Optional[str], query: str, k: int = 5) -> list[str]:
+	"""Vector search via RPC if embeddings are present."""
+	try:
+		# simple embedding using same model as ingestion
+		client = OpenAI(api_key=get_settings().openai_api_key)
+		e = client.embeddings.create(model="text-embedding-3-small", input=query)
+		emb = e.data[0].embedding
+		res = db.client.rpc(
+			"match_rag_chunks",
+			{"product": product, "currency_in": currency, "query_embedding": emb, "match_count": k},
+		).execute()
+		rows = getattr(res, "data", []) or []
+		return [r.get("content", "") for r in rows if r.get("content")]
+	except Exception:
+		return []
+
 def _rag_snippets(db: Database, product_hint: Optional[str], limit: int = 5) -> List[Dict[str, str]]:
 	"""Fetch top RAG snippets from rag_docs by product_code or keyword in title/content.
 	Simple heuristic until pgvector is added: filter by product_code, else keyword in content.
@@ -220,9 +251,14 @@ def _rag_snippets(db: Database, product_hint: Optional[str], limit: int = 5) -> 
 
 
 def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit_docs: int = 3, limit_chunks: int = 5) -> List[str]:
-	"""Pick top chunks from rag_chunks for product. Score by naive keyword hits from query.
-	Falls back to rag_docs content if chunks absent.
+	"""Pick top chunks for product with currency awareness.
+	Order: vector search (product/currency filters) → keyword fallback → doc content fallback.
 	"""
+	currency = _detect_currency(query)
+	# 1) vector search with strict product filter (no cross-product fallback)
+	vec = _vector_top_chunks(db, product_hint, currency, query, k=limit_chunks)
+	if vec:
+		return vec
 	# keywords from query: words >=3 chars
 	words = [w for w in re.findall(r"[А-Яа-яA-Za-z0-9%]+", query.lower()) if len(w) >= 3]
 	ids: List[str] = []
@@ -256,6 +292,18 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 			score += 3
 		if "годовы" in text:
 			score += 2
+		# currency agreement bonus/penalty
+		if currency:
+			if currency == "RUB" and ("руб" in text or "₽" in text):
+				score += 4
+			elif currency == "USD" and ("$" in text or "usd" in text or "доллар" in text):
+				score += 4
+			elif currency == "EUR" and ("€" in text or "eur" in text or "евро" in text):
+				score += 4
+			elif currency == "CNY" and ("¥" in text or "cny" in text or "юан" in text):
+				score += 4
+			else:
+				score -= 3
 		scored.append((score, ch["content"]))
 	scored.sort(key=lambda x: x[0], reverse=True)
 	top = [c for _, c in scored[:limit_chunks]]

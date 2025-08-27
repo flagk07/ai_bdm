@@ -1,5 +1,6 @@
 -- Ensure required extensions
 create extension if not exists pgcrypto;
+create extension if not exists vector;
 
 -- Sequence for unique agent numbers
 create sequence if not exists agent_number_seq start 1 increment 1;
@@ -197,4 +198,61 @@ create index if not exists idx_rag_chunks_prod on rag_chunks (product_code);
 
 alter table rag_chunks enable row level security;
 drop policy if exists anon_all_rag_chunks on rag_chunks;
-create policy anon_all_rag_chunks on rag_chunks for all using (true) with check (true); 
+create policy anon_all_rag_chunks on rag_chunks for all using (true) with check (true);
+
+-- Add currency and embedding to rag_chunks (idempotent)
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'rag_chunks' AND column_name = 'currency'
+	) THEN
+		ALTER TABLE rag_chunks ADD COLUMN currency text;
+	END IF;
+END$$;
+
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'rag_chunks' AND column_name = 'embedding'
+	) THEN
+		ALTER TABLE rag_chunks ADD COLUMN embedding vector(1536);
+	END IF;
+END$$;
+
+create index if not exists idx_rag_chunks_currency on rag_chunks (currency);
+-- Approximate vector index for cosine distance
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_rag_chunks_embedding'
+	) THEN
+		EXECUTE 'create index idx_rag_chunks_embedding on rag_chunks using ivfflat (embedding vector_cosine_ops) with (lists = 100)';
+	END IF;
+END$$;
+
+-- RPC for vector search with filters
+create or replace function match_rag_chunks(
+	product text,
+	currency_in text,
+	query_embedding vector(1536),
+	match_count int
+) returns table (
+	id uuid,
+	doc_id uuid,
+	content text,
+	product_code text,
+	currency text,
+	chunk_index int,
+	distance float
+) language sql stable as $$
+  select c.id, c.doc_id, c.content, c.product_code, c.currency, c.chunk_index,
+         c.embedding <=> query_embedding as distance
+  from rag_chunks c
+  where (product is null or c.product_code = product)
+    and (currency_in is null or c.currency = currency_in)
+    and c.embedding is not null
+  order by c.embedding <=> query_embedding
+  limit match_count
+$$; 
