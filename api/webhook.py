@@ -12,7 +12,7 @@ from src.config import get_settings
 from src.db import Database
 from src.handlers import register_handlers
 from src.scheduler import StatsScheduler
-from src.rag import ingest_kn_docs
+from src.rag import ingest_kn_docs, ingest_deposit_docs
 
 app = FastAPI()
 
@@ -119,9 +119,20 @@ async def ingest_rag(request: Request) -> JSONResponse:
 	token = request.query_params.get("token")
 	if expected and token != expected:
 		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	# product selector
+	product = (request.query_params.get("product") or "kn").lower()
 	# Run ingest in thread to avoid blocking loop too long
 	try:
-		cnt = await asyncio.to_thread(ingest_kn_docs, db)
+		async def _run_ingest(which: str) -> dict:
+			def _do() -> dict:
+				res = {"kn": 0, "deposit": 0}
+				if which in ("kn", "all"):
+					res["kn"] = ingest_kn_docs(db)
+				if which in ("deposit", "all"):
+					res["deposit"] = ingest_deposit_docs(db)
+				return res
+			return await asyncio.to_thread(_do)
+		resmap = await _run_ingest("all" if product == "all" else ("deposit" if product.startswith("dep") else "kn"))
 		# quick counts
 		try:
 			docs = db.client.table("rag_docs").select("id").execute()
@@ -130,7 +141,7 @@ async def ingest_rag(request: Request) -> JSONResponse:
 			cc = len(getattr(chunks, "data", []) or [])
 		except Exception:
 			dc, cc = None, None
-		return JSONResponse({"ok": True, "ingested": cnt, "docs": dc, "chunks": cc})
+		return JSONResponse({"ok": True, "ingested": resmap, "docs": dc, "chunks": cc})
 	except Exception as e:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 

@@ -304,6 +304,12 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		if k in user_clean.lower():
 			product_hint = "КН"
 			break
+	# deposits
+	if not product_hint:
+		for k in ["вклад","депозит","депоз" ]:
+			if k in user_clean.lower():
+				product_hint = "Вклад"
+				break
 	rag_texts = _rag_top_chunks(db, product_hint, user_clean, limit_docs=3, limit_chunks=5)
 	ctx_text = "\n\n".join(rag_texts) if rag_texts else ""
 	try:
