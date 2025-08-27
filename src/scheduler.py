@@ -218,29 +218,45 @@ class StatsScheduler:
 			items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
 			items.sort(key=lambda x: (-x[1], x[0]))
 			breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
-			# message header and lines with "- "
+			# build FACTS map for [F#] citations
+			facts_lines: List[str] = []
+			facts_lines.append(f"F1: Сегодня факт — {today_total}")
+			facts_lines.append(f"F2: Сегодня план — {p_day}")
+			facts_lines.append(f"F3: Сегодня выполнение, % — {self._fmt1(c_day)}")
+			facts_lines.append(f"F4: Сегодня проникновение, % — {self._fmt1(pen_day)}")
+			facts_lines.append(f"F5: Неделя факт — {week_total}")
+			facts_lines.append(f"F6: Неделя план — {p_week}")
+			facts_lines.append(f"F7: Неделя выполнение, % — {self._fmt1(c_week)}")
+			facts_lines.append(f"F8: Неделя проникновение, % — {self._fmt1(pen_week)}")
+			facts_lines.append(f"F9: Месяц факт — {month_total}")
+			facts_lines.append(f"F10: Месяц план — {p_month}")
+			facts_lines.append(f"F11: Месяц выполнение, % — {self._fmt1(c_month)}")
+			facts_lines.append(f"F12: Месяц проникновение, % — {self._fmt1(pen_month)}")
+			facts_lines.append(f"F13: RR месяца (прогноз факта) — {rr}")
+			facts_block = "FACTS:\n" + "\n".join(facts_lines) + "\n"
+			# message header and lines with "- " and [F#] citations
 			header = f"{name} — авто‑сводка\n"
 			lines = []
 			# day line
 			if show_d_day:
-				lines.append(f"- Сегодня: {today_total} факт / {p_day} план / {self._fmt1(c_day)}% выполнение / {self._fmt1(pen_day)}% проникновение / Δ {self._format_delta(d_day)}% 🎯")
+				lines.append(f"- Сегодня: {today_total} факт [F1] / {p_day} план [F2] / {self._fmt1(c_day)}% выполнение [F3] / {self._fmt1(pen_day)}% проникновение [F4] / Δ {self._format_delta(d_day)}% 🎯")
 			else:
-				lines.append(f"- Сегодня: {today_total} факт / {p_day} план / {self._fmt1(c_day)}% выполнение / {self._fmt1(pen_day)}% проникновение 🎯")
+				lines.append(f"- Сегодня: {today_total} факт [F1] / {p_day} план [F2] / {self._fmt1(c_day)}% выполнение [F3] / {self._fmt1(pen_day)}% проникновение [F4] 🎯")
 			# products
 			lines.append(f"- Сегодня по продуктам: {breakdown}")
 			# week line
 			if show_d_week:
-				lines.append(f"- Неделя: {week_total} факт / {p_week} план / {self._fmt1(c_week)}% выполнение / {self._fmt1(pen_week)}% проникновение / Δ {self._format_delta(d_week)}% 📅")
+				lines.append(f"- Неделя: {week_total} факт [F5] / {p_week} план [F6] / {self._fmt1(c_week)}% выполнение [F7] / {self._fmt1(pen_week)}% проникновение [F8] / Δ {self._format_delta(d_week)}% 📅")
 			else:
-				lines.append(f"- Неделя: {week_total} факт / {p_week} план / {self._fmt1(c_week)}% выполнение / {self._fmt1(pen_week)}% проникновение 📅")
+				lines.append(f"- Неделя: {week_total} факт [F5] / {p_week} план [F6] / {self._fmt1(c_week)}% выполнение [F7] / {self._fmt1(pen_week)}% проникновение [F8] 📅")
 			# month line
 			if show_d_month:
-				lines.append(f"- Месяц: {month_total} факт / {p_month} план / {self._fmt1(c_month)}% выполнение / {self._fmt1(pen_month)}% проникновение / Δ {self._format_delta(d_month)}% 📊")
+				lines.append(f"- Месяц: {month_total} факт [F9] / {p_month} план [F10] / {self._fmt1(c_month)}% выполнение [F11] / {self._fmt1(pen_month)}% проникновение [F12] / Δ {self._format_delta(d_month)}% 📊")
 			else:
-				lines.append(f"- Месяц: {month_total} факт / {p_month} план / {self._fmt1(c_month)}% выполнение / {self._fmt1(pen_month)}% проникновение 📊")
+				lines.append(f"- Месяц: {month_total} факт [F9] / {p_month} план [F10] / {self._fmt1(c_month)}% выполнение [F11] / {self._fmt1(pen_month)}% проникновение [F12] 📊")
 			# RR month
-			lines.append(f"- RR месяца: прогноз факта {rr} / {rr_pct}% прогноз выполнения")
-			text = header + "\n".join(lines) + "\n"
+			lines.append(f"- RR месяца: прогноз факта {rr} [F13] / {rr_pct}% прогноз выполнения")
+			text = header + "\n".join(lines) + "\n\n" + facts_block
 			# Choose comment source: AI if enabled, else deterministic
 			if self._env_on(os.environ.get("AI_SUMMARY")):
 				stats_dwm = self.db.stats_day_week_month(tg, today)
@@ -268,14 +284,16 @@ class StatsScheduler:
 				ai_prompt = (
 					"[auto_summary] Строгий формат. Каждый пункт — с новой строки. Запрещено выводить блок статистики (Период/Итого/По продуктам/Лидеры). "
 					"Не сравнивай встречи с планом (план только для кроссов).\n"
+					"Любая цифра в ответе обязана иметь ссылку [F#] (если из FACTS) и/или [S#] (если из SOURCES). Если нет подходящего факта/источника — напиши: нет данных, проверьте первоисточник.\n"
 					"1) Анализ текущих количественных результатов (встречи, кроссы, выполнение плана если есть, проникновение).\n"
 					"2) Анализ предыдущих количественных результатов (вчера/пред. неделя/пред. месяц): встречи, кроссы, выполнение если есть, проникновение).\n"
 					"3) Оценка влияния прошлых рекомендаций/заметок/диалогов на текущие цифры (кратко).\n"
 					"4) SMART-цели и конкретные шаги (1–3 пункта). Без воды и без повторения цифр из сводки.\n"
-					"Данные для анализа (используй только как контекст, цифры не повторяй дословно):\n"
-					f"Текущие: день факт {today_total}, план {p_day}, вып. {self._fmt1(c_day)}%, проникн. {self._fmt1(pen_day)}%; "
-					f"неделя факт {week_total}, план {p_week}, вып. {self._fmt1(c_week)}%, проникн. {self._fmt1(pen_week)}%; "
-					f"месяц факт {month_total}, план {p_month}, вып. {self._fmt1(c_month)}%, проникн. {self._fmt1(pen_month)}%; RR {rr} ({rr_pct}%).\n"
+					"Используй только цифры из FACTS/SOURCES (ссылки [F#]/[S#]); валюту указывай рядом со ставками.\n"
+					"Данные для анализа (используй как контекст, при цитировании ставь [F#]):\n"
+					f"Текущие: день факт {today_total} [F1], план {p_day} [F2], вып. {self._fmt1(c_day)}% [F3], проникн. {self._fmt1(pen_day)}% [F4]; "
+					f"неделя факт {week_total} [F5], план {p_week} [F6], вып. {self._fmt1(c_week)}% [F7], проникн. {self._fmt1(pen_week)}% [F8]; "
+					f"месяц факт {month_total} [F9], план {p_month} [F10], вып. {self._fmt1(c_month)}% [F11], проникн. {self._fmt1(pen_month)}% [F12]; RR {rr} [F13].\n"
 					f"Предыдущие: день факт {prev_day_total}, проникн. {self._fmt1(pen_prev_day)}%; "
 					f"неделя факт {prev_week_total}, проникн. {self._fmt1(pen_prev_week)}%; "
 					f"месяц факт {prev_month_total}, проникн. {self._fmt1(pen_prev_month)}%..\n"

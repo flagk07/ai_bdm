@@ -18,6 +18,7 @@ ALLOWED_TOPICS_HINT = (
 )
 
 
+
 def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, notes_preview: str) -> str:
 	system = (
 		# Роль и миссия
@@ -44,15 +45,20 @@ def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, note
 		"3) Рекомендации (3–6 пунктов) — конкретные шаги/формулировки/фокус‑план.\n"
 		"4) План (день/неделя) — SMART‑цели по попыткам/продуктам.\n"
 		"5) Контроль — какие метрики посмотреть до следующего контакта.\n"
-		# Правила качества
+		# Правила качества и верификации
 		"Никаких домыслов о тарифах/условиях — говори обобщённо или проси справку. "
 		"Если в системном контексте (RAG) присутствуют точные цифры (ставки, суммы, сроки) — используй их дословно и укажи диапазон/условия так, как в справке. "
 		"Не указывай числовые ставки/суммы/сроки, если их нет в RAG‑блоке (извлечённых строк) — вместо этого задай 1 уточнение (валюта/тариф/канал). "
 		"Пиши строго продукт-специфично: упоминай продукт(ы) из перечня [КН, КСП, ПУ, ДК, ИК, ИЗП, НС, Вклад, КН к ЗП]; если продукт не указан, уточни. "
 		"Не делай общих выводов вида ‘скрипт неэффективен’ — укажи конкретный этап и формулировку, которую улучшить. "
 		"Привязывай советы к метрикам (attempts, план/факт, RR) и к заметкам сотрудника. Учитывай предыдущую переписку и ранее выданные рекомендации при формулировке новых.\n"
+		# Цитирование чисел и политика выверки чувствительных данных
+		"Цитирование: любая цифра (ставка, порог, комиссия, план, факт, %, срок и т.п.) должна сопровождаться ссылкой [F#] (если взята из FACTS) и/или [S#] (если взята из SOURCES). "
+		"Если нет подходящего факта/источника — напиши: ‘нет данных, проверьте первоисточник’. "
+		"Выверка чувствительных данных: валюту всегда указывай рядом со ставкой; цифры используй только из FACTS/SOURCES; при любой неоднозначности задай 1 уточнение.\n"
 	)
 	return system
+
 
 
 def _parse_period(user_text: str, today: date) -> Tuple[date, date, str]:
@@ -83,6 +89,7 @@ def _parse_period(user_text: str, today: date) -> Tuple[date, date, str]:
 	return today, today, "сегодня"
 
 
+
 def _is_stats_request(text: str) -> bool:
 	low = text.lower()
 	# Ignore internal auto-summary prompts
@@ -90,6 +97,7 @@ def _is_stats_request(text: str) -> bool:
 		return False
 	keys = ["статист", "итог", "лидер", "рейтинг", "сколько сделал", "по продуктам"]
 	return any(k in low for k in keys)
+
 
 
 def _is_off_topic(text: str) -> bool:
@@ -109,6 +117,7 @@ def _is_off_topic(text: str) -> bool:
 	return False
 
 
+
 def _format_stats_reply(period_label: str, total: int, by_product: Dict[str, int], leaders: List[Dict[str, Any]]) -> str:
 	# Sort products by desc count, show all non-zero; if none, show "нет"
 	items = [(p, c) for p, c in by_product.items() if c > 0]
@@ -123,11 +132,13 @@ def _format_stats_reply(period_label: str, total: int, by_product: Dict[str, int
 	)
 
 
+
 def _redirect_reply() -> str:
 	return (
 		"Это вне рабочих тем. Вернёмся к делу: продукты, кросс‑продажи, скрипты, статистика.\n"
 		"1. Разбор встречи\n2. Цель на день/неделю\n3. План по продуктам"
 	)
+
 
 
 def _normalize_bullets(text: str) -> str:
@@ -202,6 +213,7 @@ def _normalize_bullets(text: str) -> str:
 	return "\n".join(result).strip()
 
 
+
 def _strip_md_emphasis(text: str) -> str:
 	"""Remove markdown emphasis like **bold** or *italic* without touching bullets."""
 	if not text:
@@ -222,6 +234,7 @@ CURRENCY_HINTS = {
 	"CNY": ["cny", "¥", "юан", "юани"],
 }
 
+
 def _detect_currency(query: str) -> Optional[str]:
 	low = query.lower()
 	for code, keys in CURRENCY_HINTS.items():
@@ -229,6 +242,7 @@ def _detect_currency(query: str) -> Optional[str]:
 			if k in low:
 				return code
 	return None
+
 
 def _vector_top_chunks(db: Database, product: Optional[str], currency: Optional[str], query: str, k: int = 5) -> list[Dict[str, Any]]:
 	"""Vector search via RPC if embeddings are present. Returns rows with content/currency/product_code/distance."""
@@ -245,6 +259,7 @@ def _vector_top_chunks(db: Database, product: Optional[str], currency: Optional[
 		return rows
 	except Exception:
 		return []
+
 
 def _rag_snippets(db: Database, product_hint: Optional[str], limit: int = 5) -> List[Dict[str, str]]:
 	"""Fetch top RAG snippets from rag_docs by product_code or keyword in title/content.
@@ -264,6 +279,7 @@ def _rag_snippets(db: Database, product_hint: Optional[str], limit: int = 5) -> 
 		return []
 
 
+
 def _extract_rate_lines(text: str) -> list[str]:
 	"""Extract lines with percent patterns to guide the model toward concrete rates."""
 	lines = [l.strip() for l in text.split('\n') if l.strip()]
@@ -275,9 +291,10 @@ def _extract_rate_lines(text: str) -> list[str]:
 	return res[:6]
 
 
+
 def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit_docs: int = 3, limit_chunks: int = 5) -> Tuple[List[str], Dict[str, Any]]:
 	"""Pick top chunks for product with currency awareness.
-	Returns (texts, meta) where meta contains currencies set and extracted rate lines.
+	Returns (texts, meta) where meta contains currencies set and extracted rate lines and sources list.
 	Order: vector search (product/currency filters) → keyword fallback → doc content fallback.
 	"""
 	currency = _detect_currency(query)
@@ -290,16 +307,19 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 		for t in texts:
 			for rl in _extract_rate_lines(t):
 				rate_lines.append(rl)
-		meta = {"currencies": list({c for c in currs if c}), "rates": rate_lines[:10], "via": "vector"}
+		meta = {"currencies": list({c for c in currs if c}), "rates": rate_lines[:10], "via": "vector", "sources": []}
 		return texts, meta
 	# keywords from query: words >=3 chars
 	words = [w for w in re.findall(r"[А-Яа-яA-Za-z0-9%]+", query.lower()) if len(w) >= 3]
 	ids: List[str] = []
+	base_docs: List[Dict[str, Any]] = []
 	try:
 		base = _rag_snippets(db, product_hint, limit=limit_docs)
+		base_docs = base
 		ids = [r.get("id") for r in base if r.get("id")]
 	except Exception:
 		ids = []
+		base_docs = []
 	chunks: List[Dict[str, str]] = []
 	if ids:
 		try:
@@ -312,8 +332,8 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 	if not chunks:
 		# fallback: first 1200 of docs
 		docs = _rag_snippets(db, product_hint, limit=limit_docs)
-		texts = [d.get("content","")[:1200] for d in docs if d.get("content")][:limit_chunks]
-		meta = {"currencies": [], "rates": [], "via": "docs"}
+		texts = [d.get("content","")[:1200] for d in docs if d.get("content")] [:limit_chunks]
+		meta = {"currencies": [], "rates": [], "via": "docs", "sources": [{"title": d.get("title",""), "url": d.get("url",""), "id": d.get("id")} for d in docs]}
 		return texts, meta
 	# score chunks
 	scored: List[Tuple[int, Dict[str,str]]] = []
@@ -359,8 +379,9 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 			pass
 	except Exception:
 		pass
-	meta = {"currencies": list({c for c in currs if c}), "rates": rate_lines[:10], "via": "keywords"}
+	meta = {"currencies": list({c for c in currs if c}), "rates": rate_lines[:10], "via": "keywords", "sources": [{"title": d.get("title",""), "url": d.get("url",""), "id": d.get("id")} for d in (base_docs or [])]}
 	return texts, meta
+
 
 
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
@@ -442,12 +463,32 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 
 	messages: List[Dict[str, str]] = []
 	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line + "; " + prev_line, group_line, notes_preview)})
+	# Inject structured FACTS and SOURCES for downstream citation [F#]/[S#]
+	facts: List[str] = []
+	try:
+		facts.append(f"F1: Период — {period_label}")
+		facts.append(f"F2: Итоги периода — факт {int(period_stats.get('total', 0))}")
+		facts.append(f"F3: План (д/н/м) — {int(plan_info.get('plan_day',0))}/{int(plan_info.get('plan_week',0))}/{int(plan_info.get('plan_month',0))}")
+		facts.append(f"F4: RR месяца — {int(plan_info.get('rr_month',0))}")
+		bp = period_stats.get('by_product') or {}
+		if bp:
+			facts.append(f"F5: По продуктам — {bp}")
+	except Exception:
+		pass
+	sources_lines: List[str] = []
+	for i, s in enumerate((rag_meta.get("sources") or [])[:5], start=1):
+		title = (s.get("title") or "Источник").strip()
+		url = (s.get("url") or "").strip()
+		sources_lines.append(f"S{i}: {title} — {url}")
+	if facts or sources_lines:
+		fs_block = ("FACTS:\n" + "\n".join(facts) if facts else "FACTS: —") + "\n\n" + ("SOURCES:\n" + "\n".join(sources_lines) if sources_lines else "SOURCES: —")
+		messages.append({"role": "system", "content": fs_block})
 	if ctx_text:
-		# Inject rate lines separately to anchor exact numbers
+		# Inject rate lines separately to anchor exact numbers; instruct to cite with [S#]
 		rate_block = "\n".join(rag_meta.get("rates", []) or [])
-		add = "Справка по продукту (для точности, не цитируй источники):\n" + ctx_text
+		add = "Справка по продукту (для точности; в ответе используй ссылки [S#] на SOURCES, URL не вставляй напрямую):\n" + ctx_text
 		if rate_block:
-			add += "\n\nИзвлечённые строки со ставками (используй дословно и укажи валюту):\n" + rate_block
+			add += "\n\nИзвлечённые строки со ставками (используй дословно и всегда указывай валюту):\n" + rate_block
 		messages.append({"role": "system", "content": add})
 	# Keep last chat history minimal to avoid polluting topic; include last 10
 	history = db.get_assistant_messages(tg_id, limit=10)
@@ -458,7 +499,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	resp = client.chat.completions.create(
 		model="gpt-4o-mini",
 		messages=messages,
-		temperature=0.2,
+		temperature=0.3,
 		max_tokens=350,
 	)
 	answer = resp.choices[0].message.content or ""
