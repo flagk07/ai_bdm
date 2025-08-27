@@ -216,8 +216,8 @@ def _detect_currency(query: str) -> Optional[str]:
 				return code
 	return None
 
-def _vector_top_chunks(db: Database, product: Optional[str], currency: Optional[str], query: str, k: int = 5) -> list[str]:
-	"""Vector search via RPC if embeddings are present."""
+def _vector_top_chunks(db: Database, product: Optional[str], currency: Optional[str], query: str, k: int = 5) -> list[Dict[str, Any]]:
+	"""Vector search via RPC if embeddings are present. Returns rows with content/currency/product_code/distance."""
 	try:
 		# simple embedding using same model as ingestion
 		client = OpenAI(api_key=get_settings().openai_api_key)
@@ -228,7 +228,7 @@ def _vector_top_chunks(db: Database, product: Optional[str], currency: Optional[
 			{"product": product, "currency_in": currency, "query_embedding": emb, "match_count": k},
 		).execute()
 		rows = getattr(res, "data", []) or []
-		return [r.get("content", "") for r in rows if r.get("content")]
+		return rows
 	except Exception:
 		return []
 
@@ -250,15 +250,34 @@ def _rag_snippets(db: Database, product_hint: Optional[str], limit: int = 5) -> 
 		return []
 
 
-def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit_docs: int = 3, limit_chunks: int = 5) -> List[str]:
+def _extract_rate_lines(text: str) -> list[str]:
+	"""Extract lines with percent patterns to guide the model toward concrete rates."""
+	lines = [l.strip() for l in text.split('\n') if l.strip()]
+	res: list[str] = []
+	import re as _re
+	for l in lines:
+		if _re.search(r"\d{1,2}(?:[.,]\d)?\s*%", l):
+			res.append(l)
+	return res[:6]
+
+
+def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit_docs: int = 3, limit_chunks: int = 5) -> Tuple[List[str], Dict[str, Any]]:
 	"""Pick top chunks for product with currency awareness.
+	Returns (texts, meta) where meta contains currencies set and extracted rate lines.
 	Order: vector search (product/currency filters) → keyword fallback → doc content fallback.
 	"""
 	currency = _detect_currency(query)
 	# 1) vector search with strict product filter (no cross-product fallback)
-	vec = _vector_top_chunks(db, product_hint, currency, query, k=limit_chunks)
-	if vec:
-		return vec
+	vec_rows = _vector_top_chunks(db, product_hint, currency, query, k=limit_chunks)
+	if vec_rows:
+		texts = [r.get("content", "") for r in vec_rows if r.get("content")]
+		currs = {r.get("currency") for r in vec_rows if r.get("currency")}
+		rate_lines: list[str] = []
+		for t in texts:
+			for rl in _extract_rate_lines(t):
+				rate_lines.append(rl)
+		meta = {"currencies": list({c for c in currs if c}), "rates": rate_lines[:10], "via": "vector"}
+		return texts, meta
 	# keywords from query: words >=3 chars
 	words = [w for w in re.findall(r"[А-Яа-яA-Za-z0-9%]+", query.lower()) if len(w) >= 3]
 	ids: List[str] = []
@@ -270,18 +289,20 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 	chunks: List[Dict[str, str]] = []
 	if ids:
 		try:
-			res = db.client.table("rag_chunks").select("content, chunk_index, product_code, doc_id").in_("doc_id", ids).limit(200).execute()
+			res = db.client.table("rag_chunks").select("content, chunk_index, product_code, doc_id, currency").in_("doc_id", ids).limit(200).execute()
 			rows = getattr(res, "data", []) or []
 			for r in rows:
-				chunks.append({"content": r.get("content",""), "chunk_index": int(r.get("chunk_index", 0))})
+				chunks.append({"content": r.get("content",""), "chunk_index": int(r.get("chunk_index", 0)), "currency": r.get("currency")})
 		except Exception:
 			chunks = []
 	if not chunks:
 		# fallback: first 1200 of docs
 		docs = _rag_snippets(db, product_hint, limit=limit_docs)
-		return [d.get("content","")[:1200] for d in docs if d.get("content")][:limit_chunks]
+		texts = [d.get("content","")[:1200] for d in docs if d.get("content")][:limit_chunks]
+		meta = {"currencies": [], "rates": [], "via": "docs"}
+		return texts, meta
 	# score chunks
-	scored: List[Tuple[int, str]] = []
+	scored: List[Tuple[int, Dict[str,str]]] = []
 	for ch in chunks:
 		text = ch["content"].lower()
 		score = sum(text.count(w) for w in words) if words else 0
@@ -292,6 +313,9 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 			score += 3
 		if "годовы" in text:
 			score += 2
+		# prefer tariff/financial terms
+		if "тариф" in text or "финансов" in text:
+			score += 3
 		# currency agreement bonus/penalty
 		if currency:
 			if currency == "RUB" and ("руб" in text or "₽" in text):
@@ -304,18 +328,25 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 				score += 4
 			else:
 				score -= 3
-		scored.append((score, ch["content"]))
+		scored.append((score, ch))
 	scored.sort(key=lambda x: x[0], reverse=True)
-	top = [c for _, c in scored[:limit_chunks]]
+	top_rows = [c for _, c in scored[:limit_chunks]]
+	texts = [r["content"] for r in top_rows]
+	currs = {r.get("currency") for r in top_rows if r.get("currency")}
+	rate_lines: list[str] = []
+	for t in texts:
+		for rl in _extract_rate_lines(t):
+			rate_lines.append(rl)
 	# optional trace: store first 200 chars of each chosen chunk
 	try:
-		if top:
-			preview = [t[:200] for t in top]
+		if texts:
+			preview = [t[:200] for t in texts]
 			# We cannot import db here; tracing is handled at call site in get_assistant_reply
 			pass
 	except Exception:
 		pass
-	return top
+	meta = {"currencies": list({c for c in currs if c}), "rates": rate_lines[:10], "via": "keywords"}
+	return texts, meta
 
 
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
@@ -375,17 +406,29 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			if k in user_clean.lower():
 				product_hint = "Вклад"
 				break
-	rag_texts = _rag_top_chunks(db, product_hint, user_clean, limit_docs=3, limit_chunks=5)
+	rag_texts, rag_meta = _rag_top_chunks(db, product_hint, user_clean, limit_docs=3, limit_chunks=5)
 	ctx_text = "\n\n".join(rag_texts) if rag_texts else ""
+	# Clarify currency if ambiguous
+	detected_curr = _detect_currency(user_clean)
+	if (not detected_curr) and rag_meta.get("currencies") and len(rag_meta["currencies"]) > 1:
+		question = "Уточните валюту вклада: 1) RUB (₽), 2) USD ($), 3) EUR (€), 4) CNY (¥)?"
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "assistant", question, off_topic=False)
+		return question
 	try:
-		db.log(tg_id, "rag_ctx", {"count": len(rag_texts) if rag_texts else 0, "previews": [t[:200] for t in (rag_texts or [])]})
+		db.log(tg_id, "rag_ctx", {"count": len(rag_texts) if rag_texts else 0, "previews": [t[:200] for t in (rag_texts or [])], "currencies": rag_meta.get("currencies", []), "via": rag_meta.get("via")})
 	except Exception:
 		pass
 
 	messages: List[Dict[str, str]] = []
 	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line + "; " + prev_line, group_line, notes_preview)})
 	if ctx_text:
-		messages.append({"role": "system", "content": "Справка по продукту (для точности, не цитируй источники):\n" + ctx_text})
+		# Inject rate lines separately to anchor exact numbers
+		rate_block = "\n".join(rag_meta.get("rates", []) or [])
+		add = "Справка по продукту (для точности, не цитируй источники):\n" + ctx_text
+		if rate_block:
+			add += "\n\nИзвлечённые строки со ставками (используй дословно и укажи валюту):\n" + rate_block
+		messages.append({"role": "system", "content": add})
 	# Keep last chat history minimal to avoid polluting topic; include last 10
 	history = db.get_assistant_messages(tg_id, limit=10)
 	for m in history:
