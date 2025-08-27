@@ -47,6 +47,7 @@ def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, note
 		# Правила качества
 		"Никаких домыслов о тарифах/условиях — говори обобщённо или проси справку. "
 		"Если в системном контексте (RAG) присутствуют точные цифры (ставки, суммы, сроки) — используй их дословно и укажи диапазон/условия так, как в справке. "
+		"Не указывай числовые ставки/суммы/сроки, если их нет в RAG‑блоке (извлечённых строк) — вместо этого задай 1 уточнение (валюта/тариф/канал). "
 		"Пиши строго продукт-специфично: упоминай продукт(ы) из перечня [КН, КСП, ПУ, ДК, ИК, ИЗП, НС, Вклад, КН к ЗП]; если продукт не указан, уточни. "
 		"Не делай общих выводов вида ‘скрипт неэффективен’ — укажи конкретный этап и формулировку, которую улучшить. "
 		"Привязывай советы к метрикам (attempts, план/факт, RR) и к заметкам сотрудника. Учитывай предыдущую переписку и ранее выданные рекомендации при формулировке новых.\n"
@@ -199,6 +200,19 @@ def _normalize_bullets(text: str) -> str:
 		i += 1
 	# Join back
 	return "\n".join(result).strip()
+
+
+def _strip_md_emphasis(text: str) -> str:
+	"""Remove markdown emphasis like **bold** or *italic* without touching bullets."""
+	if not text:
+		return ""
+	import re as _re
+	# **bold** -> bold
+	text = _re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+	# *italic* -> italic (avoid converting list markers)
+	text = _re.sub(r"(?<!^)\*(?!\s)([^*]+?)\*(?!\S)", r"\1", text, flags=_re.MULTILINE)
+	# Remove stray double-asterisks
+	return text.replace("**", "")
 
 
 CURRENCY_HINTS = {
@@ -396,7 +410,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	group_line = f"Лидеры группы за {period_label}: {best}"
 	# RAG context (silent for user, no sources in text)
 	product_hint = None
-	for k in ["КН","кн","кредит налич","наличн","налич" ]:
+	for k in ["КН","кн","кредит налич","наличн","налич","потреб","потребительск","потребительский","потр","наличные"]:
 		if k in user_clean.lower():
 			product_hint = "КН"
 			break
@@ -415,6 +429,12 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 		db.add_assistant_message(tg_id, "assistant", question, off_topic=False)
 		return question
+	# Guard: не выводим числовые ставки по КН/Вклад, если нет RAG‑строк со ставками
+	if product_hint in ("КН","Вклад") and not rag_meta.get("rates"):
+		msg = "Чтобы дать точные цифры, уточните, пожалуйста: валюта/тариф/канал. После уточнения пришлю ставки из справки."
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "assistant", msg, off_topic=False)
+		return msg
 	try:
 		db.log(tg_id, "rag_ctx", {"count": len(rag_texts) if rag_texts else 0, "previews": [t[:200] for t in (rag_texts or [])], "currencies": rag_meta.get("currencies", []), "via": rag_meta.get("via")})
 	except Exception:
@@ -444,6 +464,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	answer = resp.choices[0].message.content or ""
 	answer_clean = sanitize_text_assistant_output(answer)
 	answer_clean = _normalize_bullets(answer_clean)
+	answer_clean = _strip_md_emphasis(answer_clean)
 
 	# Store
 	db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
