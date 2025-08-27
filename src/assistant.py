@@ -466,25 +466,46 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# Inject structured FACTS and SOURCES for downstream citation [F#]/[S#], except for auto-summary prompts
 	auto_summary = "[auto_summary]" in user_clean.lower()
 	if not auto_summary:
-		facts: List[str] = []
+		# Compute day/week/month metrics to align FACTS with auto-summary
 		try:
-			facts.append(f"F1: Период — {period_label}")
-			facts.append(f"F2: Итоги периода — факт {int(period_stats.get('total', 0))}")
-			facts.append(f"F3: План (д/н/м) — {int(plan_info.get('plan_day',0))}/{int(plan_info.get('plan_week',0))}/{int(plan_info.get('plan_month',0))}")
-			facts.append(f"F4: RR месяца — {int(plan_info.get('rr_month',0))}")
-			bp = period_stats.get('by_product') or {}
-			if bp:
-				facts.append(f"F5: По продуктам — {bp}")
+			# today
+			today_total, _today_by = db._sum_attempts_query(tg_id, today, today)
+			p_day = int(plan_info.get('plan_day', 0))
+			c_day = (today_total * 100 / p_day) if p_day > 0 else 0
+			# meetings and penetration for today
+			m_day = db.meets_period_count(tg_id, today, today)
+			linked_day = db.attempts_linked_period_count(tg_id, today, today)
+			pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
+			facts_lines: List[str] = []
+			facts_lines.append(f"F1: Сегодня факт — {today_total}")
+			facts_lines.append(f"F2: Сегодня план — {p_day}")
+			facts_lines.append(f"F3: Сегодня выполнение, % — {int(round(c_day))}")
+			facts_lines.append(f"F4: Сегодня проникновение, % — {int(round(pen_day))}")
+			# minimal week/month anchors
+			start_week = today - timedelta(days=today.weekday())
+			week_total, _ = db._sum_attempts_query(tg_id, start_week, today)
+			p_week = int(plan_info.get('plan_week', 0))
+			c_week = (week_total * 100 / p_week) if p_week > 0 else 0
+			facts_lines.append(f"F5: Неделя факт — {week_total}")
+			facts_lines.append(f"F6: Неделя план — {p_week}")
+			facts_lines.append(f"F7: Неделя выполнение, % — {int(round(c_week))}")
+			start_month = today.replace(day=1)
+			month_total, _ = db._sum_attempts_query(tg_id, start_month, today)
+			p_month = int(plan_info.get('plan_month', 0))
+			c_month = (month_total * 100 / p_month) if p_month > 0 else 0
+			facts_lines.append(f"F8: Месяц факт — {month_total}")
+			facts_lines.append(f"F9: Месяц план — {p_month}")
+			facts_lines.append(f"F10: Месяц выполнение, % — {int(round(c_month))}")
+			facts_lines.append(f"F11: RR месяца (прогноз факта) — {int(plan_info.get('rr_month', 0))}")
+			sources_lines: List[str] = []
+			for i, s in enumerate((rag_meta.get("sources") or [])[:5], start=1):
+				title = (s.get("title") or "Источник").strip()
+				url = (s.get("url") or "").strip()
+				sources_lines.append(f"S{i}: {title} — {url}")
+			fs_block = ("FACTS:\n" + "\n".join(facts_lines)) + ("\n\n" + ("SOURCES:\n" + "\n".join(sources_lines)) if sources_lines else "")
+			messages.append({"role": "system", "content": fs_block})
 		except Exception:
 			pass
-		sources_lines: List[str] = []
-		for i, s in enumerate((rag_meta.get("sources") or [])[:5], start=1):
-			title = (s.get("title") or "Источник").strip()
-			url = (s.get("url") or "").strip()
-			sources_lines.append(f"S{i}: {title} — {url}")
-		if facts or sources_lines:
-			fs_block = ("FACTS:\n" + "\n".join(facts) if facts else "FACTS: —") + "\n\n" + ("SOURCES:\n" + "\n".join(sources_lines) if sources_lines else "SOURCES: —")
-			messages.append({"role": "system", "content": fs_block})
 	if ctx_text:
 		# Inject rate lines separately to anchor exact numbers; instruct to cite with [S#]
 		rate_block = "\n".join(rag_meta.get("rates", []) or [])
