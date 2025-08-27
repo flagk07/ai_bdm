@@ -463,26 +463,28 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 
 	messages: List[Dict[str, str]] = []
 	messages.append({"role": "system", "content": _build_system_prompt(agent_name, stats_line + "; " + prev_line, group_line, notes_preview)})
-	# Inject structured FACTS and SOURCES for downstream citation [F#]/[S#]
-	facts: List[str] = []
-	try:
-		facts.append(f"F1: Период — {period_label}")
-		facts.append(f"F2: Итоги периода — факт {int(period_stats.get('total', 0))}")
-		facts.append(f"F3: План (д/н/м) — {int(plan_info.get('plan_day',0))}/{int(plan_info.get('plan_week',0))}/{int(plan_info.get('plan_month',0))}")
-		facts.append(f"F4: RR месяца — {int(plan_info.get('rr_month',0))}")
-		bp = period_stats.get('by_product') or {}
-		if bp:
-			facts.append(f"F5: По продуктам — {bp}")
-	except Exception:
-		pass
-	sources_lines: List[str] = []
-	for i, s in enumerate((rag_meta.get("sources") or [])[:5], start=1):
-		title = (s.get("title") or "Источник").strip()
-		url = (s.get("url") or "").strip()
-		sources_lines.append(f"S{i}: {title} — {url}")
-	if facts or sources_lines:
-		fs_block = ("FACTS:\n" + "\n".join(facts) if facts else "FACTS: —") + "\n\n" + ("SOURCES:\n" + "\n".join(sources_lines) if sources_lines else "SOURCES: —")
-		messages.append({"role": "system", "content": fs_block})
+	# Inject structured FACTS and SOURCES for downstream citation [F#]/[S#], except for auto-summary prompts
+	auto_summary = "[auto_summary]" in user_clean.lower()
+	if not auto_summary:
+		facts: List[str] = []
+		try:
+			facts.append(f"F1: Период — {period_label}")
+			facts.append(f"F2: Итоги периода — факт {int(period_stats.get('total', 0))}")
+			facts.append(f"F3: План (д/н/м) — {int(plan_info.get('plan_day',0))}/{int(plan_info.get('plan_week',0))}/{int(plan_info.get('plan_month',0))}")
+			facts.append(f"F4: RR месяца — {int(plan_info.get('rr_month',0))}")
+			bp = period_stats.get('by_product') or {}
+			if bp:
+				facts.append(f"F5: По продуктам — {bp}")
+		except Exception:
+			pass
+		sources_lines: List[str] = []
+		for i, s in enumerate((rag_meta.get("sources") or [])[:5], start=1):
+			title = (s.get("title") or "Источник").strip()
+			url = (s.get("url") or "").strip()
+			sources_lines.append(f"S{i}: {title} — {url}")
+		if facts or sources_lines:
+			fs_block = ("FACTS:\n" + "\n".join(facts) if facts else "FACTS: —") + "\n\n" + ("SOURCES:\n" + "\n".join(sources_lines) if sources_lines else "SOURCES: —")
+			messages.append({"role": "system", "content": fs_block})
 	if ctx_text:
 		# Inject rate lines separately to anchor exact numbers; instruct to cite with [S#]
 		rate_block = "\n".join(rag_meta.get("rates", []) or [])
