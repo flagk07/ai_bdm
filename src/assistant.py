@@ -46,6 +46,7 @@ def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, note
 		"5) Контроль — какие метрики посмотреть до следующего контакта.\n"
 		# Правила качества
 		"Никаких домыслов о тарифах/условиях — говори обобщённо или проси справку. "
+		"Если в системном контексте (RAG) присутствуют точные цифры (ставки, суммы, сроки) — используй их дословно и укажи диапазон/условия так, как в справке. "
 		"Пиши строго продукт-специфично: упоминай продукт(ы) из перечня [КН, КСП, ПУ, ДК, ИК, ИЗП, НС, Вклад, КН к ЗП]; если продукт не указан, уточни. "
 		"Не делай общих выводов вида ‘скрипт неэффективен’ — укажи конкретный этап и формулировку, которую улучшить. "
 		"Привязывай советы к метрикам (attempts, план/факт, RR) и к заметкам сотрудника. Учитывай предыдущую переписку и ранее выданные рекомендации при формулировке новых.\n"
@@ -248,9 +249,25 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 	for ch in chunks:
 		text = ch["content"].lower()
 		score = sum(text.count(w) for w in words) if words else 0
+		# bonus for rate-like tokens to prioritize concrete terms
+		if "%" in text:
+			score += 5
+		if "ставк" in text:
+			score += 3
+		if "годовы" in text:
+			score += 2
 		scored.append((score, ch["content"]))
 	scored.sort(key=lambda x: x[0], reverse=True)
-	return [c for _, c in scored[:limit_chunks]]
+	top = [c for _, c in scored[:limit_chunks]]
+	# optional trace: store first 200 chars of each chosen chunk
+	try:
+		if top:
+			preview = [t[:200] for t in top]
+			# We cannot import db here; tracing is handled at call site in get_assistant_reply
+			pass
+	except Exception:
+		pass
+	return top
 
 
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
@@ -313,7 +330,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	rag_texts = _rag_top_chunks(db, product_hint, user_clean, limit_docs=3, limit_chunks=5)
 	ctx_text = "\n\n".join(rag_texts) if rag_texts else ""
 	try:
-		db.log(tg_id, "rag_ctx", {"count": len(rag_texts) if rag_texts else 0})
+		db.log(tg_id, "rag_ctx", {"count": len(rag_texts) if rag_texts else 0, "previews": [t[:200] for t in (rag_texts or [])]})
 	except Exception:
 		pass
 
