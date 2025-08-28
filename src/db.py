@@ -335,4 +335,25 @@ class Database:
 		res = self.client.table("assistant_messages").select("role, content_sanitized, off_topic, auto").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
 		msgs = getattr(res, "data", []) or []
 		msgs.reverse()
-		return msgs 
+		return msgs
+
+	# Product rates (FACTS)
+	def product_rates_upsert(self, rows: List[Dict[str, Any]]) -> None:
+		if not rows:
+			return
+		self.client.table("product_rates").insert(rows).execute()
+
+	def product_rates_query(self, payout_type: Optional[str], term_days: Optional[int], amount: Optional[float], when: Optional[date] = None) -> List[Dict[str, Any]]:
+		q = self.client.table("product_rates").select("id, product_code, payout_type, term_days, amount_min, amount_max, amount_inclusive_end, rate_percent, channel, effective_from, effective_to, source_url, source_page").eq("product_code", "Вклад")
+		if payout_type:
+			q = q.eq("payout_type", payout_type)
+		if term_days is not None:
+			q = q.eq("term_days", term_days)
+		if amount is not None:
+			q = q.lte("amount_min", amount)
+			q = q.or_(f"amount_max.is.null,amount_max.gte.{amount}")
+		if when is not None:
+			q = q.lte("effective_from", when.isoformat())
+			q = q.or_(f"effective_to.is.null,effective_to.gte.{when.isoformat()}")
+		res = q.execute()
+		return getattr(res, "data", []) or [] 

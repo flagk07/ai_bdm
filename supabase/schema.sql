@@ -255,4 +255,28 @@ create or replace function match_rag_chunks(
     and c.embedding is not null
   order by c.embedding <=> query_embedding
   limit match_count
-$$; 
+$$;
+
+-- Normalized product rates for deposits (FACTS)
+create table if not exists product_rates (
+  id uuid primary key default gen_random_uuid(),
+  product_code text not null check (product_code in ('Вклад')),
+  payout_type text not null check (payout_type in ('monthly','end')),
+  term_days int not null check (term_days in (61,91,122,181,274,367,550,730,1100)),
+  amount_min numeric not null,
+  amount_max numeric,
+  amount_inclusive_end boolean not null default true,
+  rate_percent numeric not null check (rate_percent > 0 and rate_percent <= 100),
+  channel text,
+  effective_from date,
+  effective_to date,
+  source_url text,
+  source_page int,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_product_rates_prod on product_rates(product_code, payout_type, term_days);
+create index if not exists idx_product_rates_eff on product_rates(effective_from desc);
+
+alter table product_rates enable row level security;
+ drop policy if exists anon_all_product_rates on product_rates;
+create policy anon_all_product_rates on product_rates for all using (true) with check (true); 

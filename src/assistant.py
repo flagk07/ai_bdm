@@ -18,6 +18,90 @@ ALLOWED_TOPICS_HINT = (
 )
 
 
+# ------------------------ Deposit rates helpers ------------------------
+
+def _parse_amount_rub(text: str) -> Optional[float]:
+	low = text.lower().replace(" ", " ")
+	m = re.search(r"(\d[\d\s]{3,}(?:[.,]\d{1,2})?)\s*(?:руб|₽|rub)", low)
+	if not m:
+		return None
+	num = m.group(1).replace(" ", "").replace(",", ".")
+	try:
+		return float(num)
+	except Exception:
+		return None
+
+
+def _parse_payout_type(text: str) -> Optional[str]:
+	low = text.lower()
+	if "ежемесяч" in low or "каждый месяц" in low:
+		return "monthly"
+	if "в конце" in low or "по окончании" in low or "капитализац" in low:
+		return "end"
+	return None
+
+
+def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: date) -> Optional[str]:
+	if "вклад" not in user_clean.lower() and "ставк" not in user_clean.lower():
+		return None
+	amt = _parse_amount_rub(user_clean)
+	pt = _parse_payout_type(user_clean)
+	# If neither provided, ask a single clarification
+	if amt is None and pt is None:
+		return (
+			"Уточните, пожалуйста: выплата процентов 1) ежемесячно или 2) в конце срока, и ориентировочная сумма (например, 300 000 ₽ или 1 200 000 ₽)."
+		)
+	# Query rates
+	when = today
+	rows = db.product_rates_query(pt, None, amt, when)
+	if not rows:
+		return "Нет данных о ставках по вкладам для указанных параметров, проверьте первоисточник."
+	# Group by payout_type -> term_days -> amount bucket
+	def _bucket(r: Dict[str, Any]) -> str:
+		amin = float(r.get("amount_min") or 0)
+		amax = r.get("amount_max")
+		amax_str = ("∞" if amax is None else str(int(float(amax))))
+		return f"{int(amin)}–{amax_str}"
+	rows.sort(key=lambda r: (r.get("payout_type"), int(r.get("term_days", 0)), float(r.get("amount_min") or 0)))
+	facts: List[str] = []
+	sources: Dict[str, int] = {}
+	lines: List[str] = []
+	fi = 1
+	# Build lines grouped
+	current_pt = None
+	current_term = None
+	for r in rows:
+		ptx = r.get("payout_type")
+		term = int(r.get("term_days", 0))
+		rate = float(r.get("rate_percent"))
+		buck = _bucket(r)
+		src = (r.get("source_url") or "").strip()
+		if src and src not in sources:
+			sources[src] = len(sources) + 1
+			si = sources[src]
+		else:
+			si = sources.get(src, 1) if src else 1
+		facts.append(f"F{fi}: {ptx}, {term} дн, {buck}, {rate:.1f}%")
+		ref = f"[F{fi}]" + (f"[S{si}]" if src else "")
+		if current_pt != ptx:
+			lines.append(f"1) { 'Ежемесячно' if ptx=='monthly' else 'В конце срока' }:")
+			current_pt = ptx
+			current_term = None
+		if current_term != term:
+			lines.append(f"- {term} дн: {rate:.1f}% {ref} ({buck})")
+			current_term = term
+		else:
+			lines[-1] += f"; {rate:.1f}% {ref} ({buck})"
+		fi += 1
+	# Append FACTS/SOURCES block
+	src_lines = [f"S{idx}: {url}" for url, idx in sources.items()]
+	facts_block = "FACTS:\n" + "\n".join(facts)
+	sources_block = ("\n\nSOURCES:\n" + "\n".join(src_lines)) if src_lines else ""
+	body = "\n".join(lines)
+	return body + "\n\n" + facts_block + sources_block
+
+
+# ------------------------ System prompt builder ------------------------
 
 def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, notes_preview: str) -> str:
 	system = (
@@ -416,6 +500,15 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 		db.add_assistant_message(tg_id, "assistant", reply_clean, off_topic=False)
 		return reply_clean
+
+	# Deterministic branch: deposit rates from FACTS (product_rates)
+	dep = _try_reply_deposit_rates(db, tg_id, user_clean, today)
+	if dep:
+		ans = sanitize_text_assistant_output(dep)
+		ans = _normalize_bullets(ans)
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+		return ans
 
 	# Notes only from employee for context
 	notes = db.list_notes_period(tg_id, start, end, limit=3)
