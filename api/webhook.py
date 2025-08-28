@@ -182,6 +182,44 @@ async def add_allowed(request: Request) -> JSONResponse:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.post("/api/import_rates")
+async def import_rates(request: Request) -> JSONResponse:
+	# Token protection
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	# Parse JSON array of rows
+	try:
+		payload = await request.json()
+		if not isinstance(payload, list):
+			return JSONResponse({"ok": False, "error": "expected JSON array"}, status_code=400)
+		rows: list[dict] = []
+		for item in payload:
+			if not isinstance(item, dict):
+				continue
+			row: dict = {
+				"product_code": item.get("product_code") or "Вклад",
+				"payout_type": item.get("payout_type"),
+				"term_days": int(item.get("term_days")),
+				"amount_min": float(item.get("amount_min")),
+				"amount_max": (float(item.get("amount_max")) if item.get("amount_max") is not None else None),
+				"amount_inclusive_end": bool(item.get("amount_inclusive_end", True)),
+				"rate_percent": float(item.get("rate_percent")),
+				"channel": item.get("channel"),
+				"effective_from": item.get("effective_from"),
+				"effective_to": item.get("effective_to"),
+				"source_url": item.get("source_url"),
+				"source_page": (int(item.get("source_page")) if item.get("source_page") is not None else None),
+			}
+			rows.append(row)
+		# Upsert (insert) facts
+		await asyncio.to_thread(db.product_rates_upsert, rows)
+		return JSONResponse({"ok": True, "inserted": len(rows)})
+	except Exception as e:
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request) -> JSONResponse:
 	payload = await request.json()
