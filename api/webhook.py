@@ -249,7 +249,7 @@ async def cleanup_deposits(request: Request) -> JSONResponse:
 			except Exception:
 				pass
 			return {"rates_deleted": True, "docs_deleted": True}
-		res = asyncio.run(asyncio.to_thread(_do))
+		res = await asyncio.to_thread(_do)
 		return JSONResponse({"ok": True, **(res or {})})
 	except Exception as e:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
