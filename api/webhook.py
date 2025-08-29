@@ -220,6 +220,41 @@ async def import_rates(request: Request) -> JSONResponse:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
+@app.post("/api/cleanup_deposits")
+async def cleanup_deposits(request: Request) -> JSONResponse:
+	# Token protection
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	try:
+		def _do() -> dict:
+			# delete product_rates for deposits
+			try:
+				db.client.table("product_rates").delete().eq("product_code", "Вклад").execute()
+			except Exception:
+				pass
+			# delete rag_docs and related rag_chunks for deposits
+			try:
+				# find deposit docs
+				docs = db.client.table("rag_docs").select("id").eq("product_code", "Вклад").execute()
+				ids = [r["id"] for r in (getattr(docs, "data", []) or [])]
+				for did in ids:
+					try:
+						db.client.table("rag_chunks").delete().eq("doc_id", did).execute()
+					except Exception:
+						pass
+				# delete docs
+				db.client.table("rag_docs").delete().eq("product_code", "Вклад").execute()
+			except Exception:
+				pass
+			return {"rates_deleted": True, "docs_deleted": True}
+		res = asyncio.run(asyncio.to_thread(_do))
+		return JSONResponse({"ok": True, **(res or {})})
+	except Exception as e:
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request) -> JSONResponse:
 	payload = await request.json()

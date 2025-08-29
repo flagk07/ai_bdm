@@ -10,4 +10,8 @@ uvicorn==0.30.6
 # RAG ingestion
 requests==2.32.3
 beautifulsoup4==4.12.3
-pypdf==5.0.1 
+pypdf==5.0.1
+# Local ingestion tools (no camelot)
+pandas==2.2.2
+numpy==1.26.4
+pdfplumber==0.11.4 
