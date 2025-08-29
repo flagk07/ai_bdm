@@ -124,6 +124,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	# Cross attempts flow
 	@dp.message(F.text == "Внести кросс")
 	@dp.message(Command("result"))
+	@dp.message(lambda m: (m.text or "").strip().lower() == "внести кросс")
 	async def enter_results(message: Message, state: FSMContext) -> None:
 		user_id = message.from_user.id
 		# Access already проверен ранее в /meet; здесь не дублируем, но для прямого вызова оставим мягкую проверку
@@ -212,6 +213,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	# Meet flow
 	@dp.message(F.text == "Внести встречу")
 	@dp.message(Command("meet"))
+	@dp.message(lambda m: (m.text or "").strip().lower() == "внести встречу")
 	async def meet_start(message: Message, state: FSMContext) -> None:
 		user_id = message.from_user.id
 		if not db.is_allowed(user_id):
@@ -305,6 +307,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 
 	@dp.message(F.text == "Статистика")
 	@dp.message(Command("stats"))
+	@dp.message(lambda m: (m.text or "").strip().lower() == "статистика")
 	async def stats_handler(message: Message) -> None:
 		user_id = message.from_user.id
 		if not db.is_allowed(user_id):
@@ -368,6 +371,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	# Notes and Assistant handlers below remain unchanged
 	@dp.message(F.text == "Заметки")
 	@dp.message(Command("notes"))
+	@dp.message(lambda m: (m.text or "").strip().lower() == "заметки")
 	async def notes_menu(message: Message) -> None:
 		kb = InlineKeyboardMarkup(inline_keyboard=[
 			[InlineKeyboardButton(text="Внести комментарий", callback_data="note:add")],
@@ -401,12 +405,14 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 
 	@dp.message(F.text == "Помощник")
 	@dp.message(Command("assistant"))
+	@dp.message(lambda m: (m.text or "").strip().lower() == "помощник")
 	async def assistant_start(message: Message, state: FSMContext) -> None:
 		await state.set_state(AssistantStates.chatting)
 		await state.update_data(mode="assistant")
 		await message.answer("Я готов помочь. Напишите вопрос. /cancel для выхода")
 
 	@dp.message(F.text == "/cancel")
+	@dp.message(lambda m: (m.text or "").strip().lower() == "отменено" or (m.text or "").strip().lower() == "отмена")
 	async def cancel_any(message: Message, state: FSMContext) -> None:
 		await state.clear()
 		await message.answer("Отменено", reply_markup=main_keyboard())
