@@ -264,4 +264,51 @@ async def telegram_webhook(request: Request) -> JSONResponse:
 		pass
 	update = Update.model_validate(payload)
 	await dp.feed_update(bot, update)
-	return JSONResponse({"ok": True}) 
+	return JSONResponse({"ok": True})
+
+
+@app.get("/api/diag")
+async def diag(request: Request) -> JSONResponse:
+	# Token protection
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	# Optional tg_id
+	tg_raw = request.query_params.get("tg_id")
+	try:
+		wi = await bot.get_webhook_info()
+		wh = {"url": wi.url, "pending": wi.pending_update_count}
+	except Exception as e:
+		wh = {"error": str(e)}
+	allowed = None
+	emp = None
+	msgs = None
+	last_logs = []
+	if tg_raw:
+		try:
+			uid = int(tg_raw)
+			try:
+				row = db.client.table("allowed_users").select("tg_id,active").eq("tg_id", uid).maybe_single().execute()
+				allowed = getattr(row, "data", None)
+			except Exception:
+				allowed = None
+			try:
+				row2 = db.client.table("employees").select("tg_id,agent_name,active").eq("tg_id", uid).maybe_single().execute()
+				emp = getattr(row2, "data", None)
+			except Exception:
+				emp = None
+			try:
+				m = db.client.table("assistant_messages").select("id").eq("tg_id", uid).limit(3).execute()
+				msgs = len(getattr(m, "data", []) or [])
+			except Exception:
+				msgs = None
+		except Exception:
+			pass
+	# last webhook logs
+	try:
+		lg = db.client.table("logs").select("created_at, action").order("created_at", desc=True).limit(5).execute()
+		last_logs = getattr(lg, "data", []) or []
+	except Exception:
+		last_logs = []
+	return JSONResponse({"ok": True, "webhook": wh, "allowed": allowed, "employee": emp, "messages_recent": msgs, "logs": last_logs}) 
