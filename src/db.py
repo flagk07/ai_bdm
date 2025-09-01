@@ -343,8 +343,24 @@ class Database:
 			return
 		self.client.table("product_rates").insert(rows).execute()
 
-	def product_rates_query(self, payout_type: Optional[str], term_days: Optional[int], amount: Optional[float], when: Optional[date] = None) -> List[Dict[str, Any]]:
-		q = self.client.table("product_rates").select("id, product_code, payout_type, term_days, amount_min, amount_max, amount_inclusive_end, rate_percent, channel, effective_from, effective_to, source_url, source_page").eq("product_code", "Вклад")
+	def product_rates_query(
+		self,
+		payout_type: Optional[str],
+		term_days: Optional[int],
+		amount: Optional[float],
+		when: Optional[date] = None,
+		channel: Optional[str] = None,
+		currency: Optional[str] = None,
+		source_like: Optional[str] = None,
+	) -> List[Dict[str, Any]]:
+		q = (
+			self.client
+			.table("product_rates")
+			.select(
+				"id, product_code, payout_type, term_days, amount_min, amount_max, amount_inclusive_end, rate_percent, channel, currency, effective_from, effective_to, source_url, source_page"
+			)
+			.eq("product_code", "Вклад")
+		)
 		if payout_type:
 			q = q.eq("payout_type", payout_type)
 		if term_days is not None:
@@ -352,6 +368,13 @@ class Database:
 		if amount is not None:
 			q = q.lte("amount_min", amount)
 			q = q.or_(f"amount_max.is.null,amount_max.gte.{amount}")
+		if channel:
+			q = q.eq("channel", channel)
+		if currency:
+			q = q.eq("currency", currency)
+		if source_like:
+			q = q.ilike("source_url", source_like)
+		# Date filters are optional; if not provided, return latest rows indifferent to date
 		if when is not None:
 			q = q.lte("effective_from", when.isoformat())
 			q = q.or_(f"effective_to.is.null,effective_to.gte.{when.isoformat()}")
