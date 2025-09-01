@@ -138,11 +138,23 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 				"Напишите ‘показать все’, если нужен полный список (может быть длинно)."
 			)
 	# Group by payout_type -> term_days -> amount bucket
+	def _fmt_amount(val: Optional[float], curr: Optional[str]) -> str:
+		if val is None:
+			return ""
+		try:
+			num = f"{float(val):,.0f}".replace(",", " ")
+		except Exception:
+			num = str(val)
+		if (curr or "").upper() == "RUB":
+			return f"{num} ₽"
+		return f"{num} {curr or ''}".strip()
 	def _bucket(r: Dict[str, Any]) -> str:
 		amin = float(r.get("amount_min") or 0)
 		amax = r.get("amount_max")
-		amax_str = ("∞" if amax is None else str(int(float(amax))))
-		return f"{int(amin)}–{amax_str}"
+		curr = (r.get("currency") or "").upper() or None
+		if amax is None:
+			return f"от {_fmt_amount(amin, curr)}"
+		return f"{_fmt_amount(amin, curr)}–{_fmt_amount(float(amax), curr)}"
 	rows.sort(key=lambda r: (r.get("payout_type"), int(r.get("term_days", 0)), float(r.get("amount_min") or 0)))
 	facts: List[str] = []
 	sources: Dict[str, int] = {}
@@ -155,7 +167,9 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 	for r in rows:
 		ptx = r.get("payout_type")
 		term = int(r.get("term_days", 0))
-		rate = float(r.get("rate_percent"))
+		rate_raw = float(r.get("rate_percent"))
+		# If rates are stored as fractions (<=1), convert to percent
+		rate_pct = (rate_raw * 100.0) if rate_raw <= 1.0 else rate_raw
 		buck = _bucket(r)
 		src = (r.get("source_url") or "").strip()
 		if src and src not in sources:
@@ -164,17 +178,18 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		else:
 			si = sources.get(src, 1) if src else 1
 		plan = (r.get("plan_name") or "").strip()
-		facts.append(f"F{fi}: {ptx}, {term} дн, {buck}, {rate:.1f}%" + (f", {plan}" if plan else ""))
+		facts.append(f"F{fi}: {ptx}, {term} дн, {buck}, {rate_pct:.1f}%" + (f", {plan}" if plan else ""))
 		ref = f"[F{fi}]" + (f"[S{si}]" if src else "")
 		if current_pt != ptx:
 			lines.append(f"1) { 'Ежемесячно' if ptx=='monthly' else 'В конце срока' }:")
 			current_pt = ptx
 			current_term = None
 		if current_term != term:
-			lines.append(f"- {term} дн: " + (f"{plan}: " if plan else "") + f"{rate:.1f}% {ref} ({buck})")
+			lines.append(f"- {term} дн:")
 			current_term = term
-		else:
-			lines[-1] += f"; " + (f"{plan}: " if plan else "") + f"{rate:.1f}% {ref} ({buck})"
+		# One product per line under term
+		prod_name = f"{plan}: " if plan else ""
+		lines.append(f"  • {prod_name}{rate_pct:.1f}% {ref} ({buck})")
 		fi += 1
 		if len(lines) > MAX_OUTPUT_LINES:
 			break
@@ -184,7 +199,14 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 	sources_block = ("\n\nSOURCES:\n" + "\n".join(src_lines)) if src_lines else ""
 	body = "\n".join(lines)
 	tail = "\n\n(Ответ сокращён. Напишите ‘показать все’ для полного списка.)" if len(rows) > MAX_OUTPUT_LINES else ""
-	return body + tail + "\n\n" + facts_block + sources_block
+	# Brief next steps for the employee
+	actions = (
+		"\n\nДействия сотрудника:\n"
+		"- Уточните у клиента: сумма и срок окончательные?\n"
+		"- Предложите 2–3 подходящих тарифа и согласуйте выбор.\n"
+		"- Зафиксируйте выбор и переходите к оформлению."
+	)
+	return body + tail + actions + "\n\n" + facts_block + sources_block
 
 
 # ------------------------ System prompt builder ------------------------
