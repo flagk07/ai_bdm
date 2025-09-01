@@ -254,7 +254,17 @@ async def run_bot() -> None:
 		stats = db.stats_day_week_month(message.from_user.id, today)
 		month_rank = db.month_ranking(today.replace(day=1), today)
 		reply = get_assistant_reply(db, message.from_user.id, emp.agent_name, stats, month_rank, message.text or "")
-		await message.answer(reply, reply_markup=main_keyboard())
+		# Telegram hard limit ~4096 chars; split into safe chunks
+		MAX_LEN = 3500
+		if len(reply) <= MAX_LEN:
+			await message.answer(reply, reply_markup=main_keyboard())
+		else:
+			start = 0
+			while start < len(reply):
+				chunk = reply[start:start+MAX_LEN]
+				await message.answer(chunk)
+				start += MAX_LEN
+			await message.answer("(конец ответа)", reply_markup=main_keyboard())
 
 	# Native command menu
 	try:
