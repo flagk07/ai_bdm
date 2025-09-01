@@ -255,6 +255,148 @@ async def cleanup_deposits(request: Request) -> JSONResponse:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.post("/api/ingest_deposit_custom")
+async def ingest_deposit_custom(request: Request) -> JSONResponse:
+	# Token protection
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	# Parse body
+	try:
+		payload = await request.json()
+		urls = payload.get("urls") if isinstance(payload, dict) else None
+		if not urls or not isinstance(urls, list):
+			return JSONResponse({"ok": False, "error": "expected {\"urls\":[...]}"}, status_code=400)
+	except Exception as e:
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+	# Run ingestion in a thread to avoid blocking
+	def _do() -> dict:
+			from src.rag import ingest_deposit_docs
+			# Temporarily replace deposit URLs inside ingest_deposit_docs by monkey patching
+			# Safer approach: call internal helpers similarly to ingest_deposit_docs
+			# For now, reuse ingest_deposit_docs after setting a module-level variable
+			import src.rag as rag_mod
+			orig = getattr(rag_mod, "ingest_deposit_docs")
+			# Define a custom ingest that uses provided urls but same logic
+			def _ingest_custom(db_local: Database) -> int:
+				count = 0
+				for u in urls:
+					try:
+						mime, title, text = rag_mod._fetch_text_from_url(u)
+						if not text:
+							continue
+						row = {"url": u, "title": title, "product_code": "Вклад", "mime": mime, "content": text}
+						# upsert doc
+						doc_id = None
+						try:
+							ins = db_local.client.table("rag_docs").upsert(row, on_conflict="url").select("id").eq("url", u).maybe_single().execute()
+							doc = getattr(ins, "data", None)
+							if doc and doc.get("id"):
+								doc_id = doc["id"]
+						except Exception:
+							try:
+								db_local.client.table("rag_docs").delete().eq("url", u).execute()
+								db_local.client.table("rag_docs").insert(row).execute()
+								sel = db_local.client.table("rag_docs").select("id").eq("url", u).single().execute()
+								doc_id = getattr(sel, "data", {}).get("id")
+							except Exception:
+								continue
+						if not doc_id:
+							try:
+								sel2 = db_local.client.table("rag_docs").select("id").eq("url", u).single().execute()
+								doc_id = getattr(sel2, "data", {}).get("id")
+							except Exception:
+								pass
+						if not doc_id:
+							continue
+						# clear previous chunks for this doc
+						try:
+							db_local.client.table("rag_chunks").delete().eq("doc_id", doc_id).execute()
+						except Exception:
+							pass
+						# sections/chunks
+						sections = rag_mod._extract_deposit_rule_sections(text)
+						parts = rag_mod._pack_rule_sections_to_chunks(sections)
+						embeds = rag_mod._embed_texts(parts)
+						bulk = []
+						for idx, part in enumerate(parts):
+							if not part.strip():
+								continue
+							rowc = {"doc_id": doc_id, "product_code": "Вклад", "chunk_index": idx, "content": part}
+							cur = rag_mod._infer_currency(part)
+							if cur:
+								rowc["currency"] = cur
+							emb = embeds[idx] if idx < len(embeds) else None
+							if emb:
+								rowc["embedding"] = emb
+							bulk.append(rowc)
+						if bulk:
+							db_local.client.table("rag_chunks").insert(bulk).execute()
+						count += 1
+					except Exception:
+						continue
+				# parse rates from the first URL only
+				try:
+					first_url = urls[0]
+					mime, title, text = rag_mod._fetch_text_from_url(first_url)
+					# call external parser script-like helper if exists; else quick heuristic from text
+					from src.db import Database as _DB
+					from src.assistant import _parse_payout_type as _ppt
+					import re as _re
+					lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+					rows: list[dict] = []
+					# very simple extraction: find blocks by payout headers and rows with pattern term and %
+					current_payout = None
+					for ln in lines:
+						low = ln.lower()
+						if "ежемесячно" in low:
+							current_payout = "monthly"
+						elif "в конце срока" in low:
+							current_payout = "end"
+						m = _re.findall(r"(61|91|122|181|274|367|550|730|1100).*?(\d{1,2}[\.,]\d)\s*%.*?(\d{1,2}[\.,]\d)\s*%", low)
+						if m and current_payout:
+							# This simplistic regex expects two buckets per row; real parser is in scripts/extract_deposit_rates.py
+							term = int(m[0][0])
+							rate1 = float(m[0][1].replace(',', '.'))
+							rate2 = float(m[0][2].replace(',', '.'))
+							rows.append({
+								"product_code": "Вклад",
+								"payout_type": current_payout,
+								"term_days": term,
+								"amount_min": 30000.0,
+								"amount_max": 999999.99,
+								"amount_inclusive_end": True,
+								"rate_percent": rate1,
+								"channel": None,
+								"effective_from": None,
+								"effective_to": None,
+								"source_url": first_url,
+								"source_page": None,
+							})
+						rows.append({
+							"product_code": "Вклад",
+							"payout_type": current_payout,
+							"term_days": term,
+							"amount_min": 1000000.0,
+							"amount_max": 15000000.0,
+							"amount_inclusive_end": True,
+							"rate_percent": rate2,
+							"channel": None,
+							"effective_from": None,
+							"effective_to": None,
+							"source_url": first_url,
+							"source_page": None,
+						})
+					if rows:
+						db_local.product_rates_upsert(rows)
+				except Exception:
+					pass
+			return {"docs": count}
+	res = await asyncio.to_thread(_do)
+	return JSONResponse({"ok": True, **res})
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request) -> JSONResponse:
 	payload = await request.json()
