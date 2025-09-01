@@ -155,74 +155,51 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		if amax is None:
 			return f"от {_fmt_amount(amin, curr)}"
 		return f"{_fmt_amount(amin, curr)}–{_fmt_amount(float(amax), curr)}"
-	rows.sort(key=lambda r: (r.get("payout_type"), int(r.get("term_days", 0)), float(r.get("amount_min") or 0)))
-	facts: List[str] = []
-	sources: Dict[str, int] = {}
-	lines: List[str] = []
-	fi = 1
-	# Build lines grouped, but cap total lines to keep message short
-	MAX_OUTPUT_LINES = 20
-	current_pt = None
-	current_term = None
-	for r in rows:
-		ptx = r.get("payout_type")
-		term = int(r.get("term_days", 0))
-		rate_raw = float(r.get("rate_percent"))
-		# If rates are stored as fractions (<=1), convert to percent
-		rate_pct = (rate_raw * 100.0) if rate_raw <= 1.0 else rate_raw
-		buck = _bucket(r)
-		src = (r.get("source_url") or "").strip()
-		if src and src not in sources:
-			sources[src] = len(sources) + 1
-			si = sources[src]
-		else:
-			si = sources.get(src, 1) if src else 1
+	# Build concise header
+	header_parts: List[str] = ["Подбор вкладов"]
+	if term is not None:
+		header_parts.append(f"на срок {term} дней")
+	if pt is not None:
+		header_parts.append("с ежемесячной выплатой процентов" if pt == "monthly" else "с выплатой в конце срока")
+	if amt is not None:
+		header_parts.append(f"на сумму {_fmt_amount(amt, curr)}")
+	header = " ".join(header_parts) + ":"
+	# Sort by term, then rate desc, then amount_min
+	r_sorted = sorted(rows, key=lambda r: (int(r.get("term_days", 0)), -(_rate_pct_of(r)), float(r.get("amount_min") or 0)))
+	lines = [header]
+	count = 0
+	for r in r_sorted:
+		term_r = int(r.get("term_days", 0))
+		if term is not None and term_r != term:
+			continue
 		plan = (r.get("plan_name") or "").strip()
-		facts.append(f"F{fi}: {ptx}, {term} дн, {buck}, {rate_pct:.1f}%" + (f", {plan}" if plan else ""))
-		ref = f"[F{fi}]" + (f"[S{si}]" if src else "")
-		if current_pt != ptx:
-			lines.append(f"1) { 'Ежемесячно' if ptx=='monthly' else 'В конце срока' }:")
-			current_pt = ptx
-			current_term = None
-		if current_term != term:
-			lines.append(f"- {term} дн:")
-			current_term = term
-		# One product per line under term
-		prod_name = f"{plan}: " if plan else ""
-		lines.append(f"  • {prod_name}{rate_pct:.1f}% {ref} ({buck})")
-		fi += 1
-		if len(lines) > MAX_OUTPUT_LINES:
+		if not plan:
+			continue
+		ref_src = (r.get("source_url") or "").strip()
+		if ref_src and ref_src not in sources:
+			sources[ref_src] = len(sources) + 1
+			si = sources[ref_src]
+		else:
+			si = sources.get(ref_src, 1) if ref_src else 1
+		lines.append(f"- {plan}: {_rate_pct_of(r):.1f}%" + (f" [S{si}]" if ref_src else ""))
+		count += 1
+		if count >= MAX_OUTPUT_LINES:
 			break
-	# Append SOURCES block, optional hint if truncated, and add recommendations/actions
+	# Recommend top tariffs separately (numbered)
+	top = sorted([r for r in r_sorted if (term is None or int(r.get("term_days", 0)) == term)], key=lambda r: _rate_pct_of(r), reverse=True)[:2]
+	reco = ""
+	if top:
+		reco_lines = []
+		for i, t in enumerate(top, start=1):
+			pname = (t.get("plan_name") or "").strip()
+			reco_lines.append(f"{i}) {pname}: {_rate_pct_of(t):.1f}%")
+		reco = "\nРекомендуемое (по ставке):\n" + "\n".join(reco_lines)
+	# Actions single line
+	actions = "\nДействия сотрудника: выберите наиболее подходящий тариф из списка и помогите открыть вклад клиенту"
+	# Only SOURCES block
 	src_lines = [f"S{idx}: {url}" for url, idx in sources.items()]
-	body = "\n".join(lines)
-	tail = "\n\n(Ответ сокращён. Напишите ‘показать все’ для полного списка.)" if len(rows) > MAX_OUTPUT_LINES else ""
-	# Recommend top 1–2 tariffs by rate
-	def _rate_pct_of(r: Dict[str, Any]) -> float:
-		val = float(r.get("rate_percent") or 0)
-		return (val * 100.0) if val <= 1.0 else val
-	top = sorted(rows, key=lambda r: _rate_pct_of(r), reverse=True)[:2]
-	reco_lines: List[str] = []
-	for t in top:
-		pname = (t.get("plan_name") or "").strip()
-		reco_lines.append(f"• {(pname + ': ') if pname else ''}{_rate_pct_of(t):.1f}%")
-	reco = ("\nРекомендуемое (по ставке):\n" + "\n".join(reco_lines)) if reco_lines else ""
-	# Context-aware actions
-	action_lines: List[str] = []
-	if curr is None:
-		action_lines.append("- Уточните валюту (RUB/USD/EUR/CNY)")
-	if pt is None:
-		action_lines.append("- Уточните тип выплаты (ежемесячно/в конце)")
-	if amt is None:
-		action_lines.append("- Подтвердите ориентировочную сумму")
-	if term is None:
-		action_lines.append("- Подтвердите срок (например, 181 дней)")
-	# Always propose next concrete step
-	action_lines.append("- Выберите тариф из списка и переходите к оформлению")
-	actions = ("\n\nДействия сотрудника:\n" + "\n".join(action_lines)) if action_lines else ""
-	# Only SOURCES (без FACTS-блока)
 	sources_block = ("\n\nSOURCES:\n" + "\n".join(src_lines)) if src_lines else ""
-	return body + tail + reco + actions + sources_block
+	return "\n".join(lines) + ("\n" + reco if reco else "") + actions + sources_block
 
 
 # ------------------------ System prompt builder ------------------------
@@ -246,6 +223,8 @@ def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, note
 		# Язык и стиль
 		"Стиль: по делу, деловой и доброжелательный, без воды. Короткие абзацы и нумерованные пункты 1., 2., 3. "
 		"Без жирного и эмодзи. Не используй ПДн и не запрашивай их. Если данных не хватает — спроси не больше 1 уточнения.\n"
+		"Ты — мастер продаж: владеешь техниками SPIN, потребностями/выгодами, работой с возражениями, апселлом/кросс‑селлом. "
+		"В ответах давай короткие, прикладные советы по продажам (формулировки, следующий шаг, фиксация договорённостей) применительно к контексту клиента.\n"
 		# Формат
 		"Формат ответа по умолчанию (если не просили иначе):\n"
 		"1) Сводка (1–2 строки) — что видно и куда двигать.\n"
