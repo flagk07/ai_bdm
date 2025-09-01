@@ -21,15 +21,34 @@ ALLOWED_TOPICS_HINT = (
 # ------------------------ Deposit rates helpers ------------------------
 
 def _parse_amount_rub(text: str) -> Optional[float]:
-	low = text.lower().replace(" ", " ")
-	m = re.search(r"(\d[\d\s]{3,}(?:[.,]\d{1,2})?)\s*(?:руб|₽|rub)", low)
-	if not m:
-		return None
-	num = m.group(1).replace(" ", "").replace(",", ".")
-	try:
-		return float(num)
-	except Exception:
-		return None
+	low = text.lower().replace("\u00a0", " ")
+	# 1) Explicit currency forms
+	m = re.search(r"(\d[\d\s]{2,}(?:[.,]\d{1,2})?)\s*(?:руб|₽|rub)", low)
+	if m:
+		num = m.group(1).replace(" ", "").replace(",", ".")
+		try:
+			return float(num)
+		except Exception:
+			return None
+	# 2) Word-based multipliers (млн/тыс) without currency
+	m2 = re.search(r"(\d+(?:[.,]\d+)?)\s*(млн|миллион|million|m|тыс|тысяч|k)\b", low)
+	if m2:
+		val = float(m2.group(1).replace(",", "."))
+		unit = m2.group(2)
+		mult = 1.0
+		if unit.startswith("мл") or unit.startswith("mil") or unit == "m":
+			mult = 1_000_000.0
+		elif unit.startswith("тыс") or unit.startswith("k"):
+			mult = 1_000.0
+		return val * mult
+	# 3) Bare number likely representing RUB (>=5 digits)
+	m3 = re.search(r"\b(\d[\d\s]{4,})\b", low)
+	if m3:
+		try:
+			return float(m3.group(1).replace(" ", ""))
+		except Exception:
+			return None
+	return None
 
 
 def _parse_payout_type(text: str) -> Optional[str]:
@@ -42,7 +61,9 @@ def _parse_payout_type(text: str) -> Optional[str]:
 
 
 def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: date) -> Optional[str]:
-	if "вклад" not in user_clean.lower() and "ставк" not in user_clean.lower():
+	lowq = user_clean.lower()
+	# Broaden trigger: treat as deposit rates query if deposit or payout phrasing is present
+	if not any(k in lowq for k in ["вклад", "депозит", "ставк", "ежемесяч", "в конце", "капитализац"]):
 		return None
 	amt = _parse_amount_rub(user_clean)
 	pt = _parse_payout_type(user_clean)
@@ -53,7 +74,14 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		)
 	# Query rates
 	when = today
-	rows = db.product_rates_query(pt, None, amt, when)
+	# Channel filter for «Мой Дом»
+	channel = None
+	if "мой дом" in lowq or "интернет-банк" in lowq or "интернет банк" in lowq:
+		channel = "Интернет-Банк"
+	rows = db.product_rates_query(pt, None, amt, when, channel=channel, source_like=None)
+	if not rows:
+		# Fallback without filters in case user didn't specify enough context
+		rows = db.product_rates_query(pt, None, amt, when)
 	if not rows:
 		return "Нет данных о ставках по вкладам для указанных параметров, проверьте первоисточник."
 	# Group by payout_type -> term_days -> amount bucket
