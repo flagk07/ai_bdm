@@ -560,7 +560,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	settings = get_settings()
 	client = OpenAI(api_key=settings.openai_api_key)
 
-	user_clean = sanitize_text(user_message)
+	user_clean = sanitize_text_assistant_output(user_message)
 	today = date.today()
 	start, end, period_label = _parse_period(user_clean, today)
 
