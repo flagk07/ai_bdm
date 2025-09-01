@@ -357,7 +357,7 @@ class Database:
 			self.client
 			.table("product_rates")
 			.select(
-				"id, product_code, payout_type, term_days, amount_min, amount_max, amount_inclusive_end, rate_percent, channel, currency, effective_from, effective_to, source_url, source_page"
+				"id, product_code, plan_name, payout_type, term_days, amount_min, amount_max, amount_inclusive_end, rate_percent, channel, currency, effective_from, effective_to, source_url, source_page"
 			)
 			.eq("product_code", "Вклад")
 		)

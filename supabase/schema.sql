@@ -280,3 +280,18 @@ create index if not exists idx_product_rates_eff on product_rates(effective_from
 alter table product_rates enable row level security;
  drop policy if exists anon_all_product_rates on product_rates;
 create policy anon_all_product_rates on product_rates for all using (true) with check (true); 
+
+-- Relax term_days constraint to allow any positive integer
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1 FROM information_schema.table_constraints tc
+		JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
+		WHERE tc.table_name = 'product_rates' AND tc.constraint_type = 'CHECK' AND ccu.column_name = 'term_days'
+	) THEN
+		ALTER TABLE product_rates DROP CONSTRAINT IF EXISTS product_rates_term_days_check;
+	END IF;
+END$$;
+
+ALTER TABLE product_rates
+	ADD CONSTRAINT product_rates_term_days_check CHECK (term_days > 0); 

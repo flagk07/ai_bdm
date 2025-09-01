@@ -111,17 +111,18 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 			si = sources[src]
 		else:
 			si = sources.get(src, 1) if src else 1
-		facts.append(f"F{fi}: {ptx}, {term} дн, {buck}, {rate:.1f}%")
+		plan = (r.get("plan_name") or "").strip()
+		facts.append(f"F{fi}: {ptx}, {term} дн, {buck}, {rate:.1f}%" + (f", {plan}" if plan else ""))
 		ref = f"[F{fi}]" + (f"[S{si}]" if src else "")
 		if current_pt != ptx:
 			lines.append(f"1) { 'Ежемесячно' if ptx=='monthly' else 'В конце срока' }:")
 			current_pt = ptx
 			current_term = None
 		if current_term != term:
-			lines.append(f"- {term} дн: {rate:.1f}% {ref} ({buck})")
+			lines.append(f"- {term} дн: " + (f"{plan}: " if plan else "") + f"{rate:.1f}% {ref} ({buck})")
 			current_term = term
 		else:
-			lines[-1] += f"; {rate:.1f}% {ref} ({buck})"
+			lines[-1] += f"; " + (f"{plan}: " if plan else "") + f"{rate:.1f}% {ref} ({buck})"
 		fi += 1
 	# Append FACTS/SOURCES block
 	src_lines = [f"S{idx}: {url}" for url, idx in sources.items()]
