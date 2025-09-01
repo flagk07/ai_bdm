@@ -432,12 +432,55 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			await state.clear()
 			return
 		# assistant
+		try:
+			db.log(message.from_user.id, "assistant_in", {"text": (message.text or "")[:300]})
+		except Exception:
+			pass
 		emp = db.get_or_register_employee(message.from_user.id)
 		if not emp:
 			await message.answer("Временная ошибка базы. Повторите позже.", reply_markup=main_keyboard())
 			return
 		today = date.today()
-		stats = db.stats_day_week_month(message.from_user.id, today)
-		month_rank = db.month_ranking(today.replace(day=1), today)
-		reply = get_assistant_reply(db, message.from_user.id, emp.agent_name, stats, month_rank, message.text or "")
-		await message.answer(reply, reply_markup=main_keyboard()) 
+		try:
+			stats = db.stats_day_week_month(message.from_user.id, today)
+			month_rank = db.month_ranking(today.replace(day=1), today)
+			reply = get_assistant_reply(db, message.from_user.id, emp.agent_name, stats, month_rank, message.text or "")
+			await message.answer(reply, reply_markup=main_keyboard())
+		except Exception as e:
+			try:
+				db.log(message.from_user.id, "assistant_error", {"error": str(e)})
+			except Exception:
+				pass
+			await message.answer("Техническая пауза. Повторите запрос одним сообщением, например: ‘ежемесячно, 1 000 000 ₽, 181 дней’.", reply_markup=main_keyboard())
+
+	# FINAL CATCH-ALL: forward any unmatched text into assistant mode
+	@dp.message()
+	async def catch_all(message: Message, state: FSMContext) -> None:
+		# If not allowed, short-circuit
+		if not db.is_allowed(message.from_user.id):
+			return
+		# Ensure assistant mode and forward
+		await state.set_state(AssistantStates.chatting)
+		await state.update_data(mode="assistant")
+		# Reuse assistant handler path
+		try:
+			db.log(message.from_user.id, "assistant_forward", {"text": (message.text or "")[:200]})
+		except Exception:
+			pass
+		# Call get_assistant_reply directly
+		emp = db.get_or_register_employee(message.from_user.id)
+		if not emp:
+			await message.answer("Временная ошибка базы. Повторите позже.", reply_markup=main_keyboard())
+			return
+		today = date.today()
+		try:
+			stats = db.stats_day_week_month(message.from_user.id, today)
+			month_rank = db.month_ranking(today.replace(day=1), today)
+			reply = get_assistant_reply(db, message.from_user.id, emp.agent_name, stats, month_rank, message.text or "")
+			await message.answer(reply, reply_markup=main_keyboard())
+		except Exception as e:
+			try:
+				db.log(message.from_user.id, "assistant_error_final", {"error": str(e)})
+			except Exception:
+				pass
+			await message.answer("Техническая пауза. Повторите запрос одним сообщением.", reply_markup=main_keyboard()) 
