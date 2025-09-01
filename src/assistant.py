@@ -193,20 +193,36 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		fi += 1
 		if len(lines) > MAX_OUTPUT_LINES:
 			break
-	# Append FACTS/SOURCES block, and hint if truncated
+	# Append SOURCES block, optional hint if truncated, and add recommendations/actions
 	src_lines = [f"S{idx}: {url}" for url, idx in sources.items()]
-	facts_block = "FACTS:\n" + "\n".join(facts[:MAX_OUTPUT_LINES*2])
-	sources_block = ("\n\nSOURCES:\n" + "\n".join(src_lines)) if src_lines else ""
 	body = "\n".join(lines)
 	tail = "\n\n(Ответ сокращён. Напишите ‘показать все’ для полного списка.)" if len(rows) > MAX_OUTPUT_LINES else ""
-	# Brief next steps for the employee
-	actions = (
-		"\n\nДействия сотрудника:\n"
-		"- Уточните у клиента: сумма и срок окончательные?\n"
-		"- Предложите 2–3 подходящих тарифа и согласуйте выбор.\n"
-		"- Зафиксируйте выбор и переходите к оформлению."
-	)
-	return body + tail + actions + "\n\n" + facts_block + sources_block
+	# Recommend top 1–2 tariffs by rate
+	def _rate_pct_of(r: Dict[str, Any]) -> float:
+		val = float(r.get("rate_percent") or 0)
+		return (val * 100.0) if val <= 1.0 else val
+	top = sorted(rows, key=lambda r: _rate_pct_of(r), reverse=True)[:2]
+	reco_lines: List[str] = []
+	for t in top:
+		pname = (t.get("plan_name") or "").strip()
+		reco_lines.append(f"• {(pname + ': ') if pname else ''}{_rate_pct_of(t):.1f}%")
+	reco = ("\nРекомендуемое (по ставке):\n" + "\n".join(reco_lines)) if reco_lines else ""
+	# Context-aware actions
+	action_lines: List[str] = []
+	if curr is None:
+		action_lines.append("- Уточните валюту (RUB/USD/EUR/CNY)")
+	if pt is None:
+		action_lines.append("- Уточните тип выплаты (ежемесячно/в конце)")
+	if amt is None:
+		action_lines.append("- Подтвердите ориентировочную сумму")
+	if term is None:
+		action_lines.append("- Подтвердите срок (например, 181 дней)")
+	# Always propose next concrete step
+	action_lines.append("- Выберите тариф из списка и переходите к оформлению")
+	actions = ("\n\nДействия сотрудника:\n" + "\n".join(action_lines)) if action_lines else ""
+	# Only SOURCES (без FACTS-блока)
+	sources_block = ("\n\nSOURCES:\n" + "\n".join(src_lines)) if src_lines else ""
+	return body + tail + reco + actions + sources_block
 
 
 # ------------------------ System prompt builder ------------------------
