@@ -374,20 +374,20 @@ async def ingest_deposit_custom(request: Request) -> JSONResponse:
 								"source_url": first_url,
 								"source_page": None,
 							})
-						rows.append({
-							"product_code": "Вклад",
-							"payout_type": current_payout,
-							"term_days": term,
-							"amount_min": 1000000.0,
-							"amount_max": 15000000.0,
-							"amount_inclusive_end": True,
-							"rate_percent": rate2,
-							"channel": None,
-							"effective_from": None,
-							"effective_to": None,
-							"source_url": first_url,
-							"source_page": None,
-						})
+							rows.append({
+								"product_code": "Вклад",
+								"payout_type": current_payout,
+								"term_days": term,
+								"amount_min": 1000000.0,
+								"amount_max": 15000000.0,
+								"amount_inclusive_end": True,
+								"rate_percent": rate2,
+								"channel": None,
+								"effective_from": None,
+								"effective_to": None,
+								"source_url": first_url,
+								"source_page": None,
+							})
 					if rows:
 						db_local.product_rates_upsert(rows)
 				except Exception:
