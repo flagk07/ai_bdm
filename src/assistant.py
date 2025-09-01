@@ -73,15 +73,17 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 			"Уточните, пожалуйста: выплата процентов 1) ежемесячно или 2) в конце срока, и ориентировочная сумма (например, 300 000 ₽ или 1 200 000 ₽)."
 		)
 	# Query rates
-	when = today
+	when = None  # do not filter by dates to allow rows with NULL effective_from/to
 	# Channel filter for «Мой Дом»
 	channel = None
 	if "мой дом" in lowq or "интернет-банк" in lowq or "интернет банк" in lowq:
 		channel = "Интернет-Банк"
-	rows = db.product_rates_query(pt, None, amt, when, channel=channel, source_like=None)
+	# Detect currency from query (₽/$/€/¥), else no filter
+	curr = _detect_currency(user_clean)
+	rows = db.product_rates_query(pt, None, amt, when, channel=channel, currency=curr, source_like=None)
 	if not rows:
 		# Fallback without filters in case user didn't specify enough context
-		rows = db.product_rates_query(pt, None, amt, when)
+		rows = db.product_rates_query(pt, None, amt, None)
 	if not rows:
 		return "Нет данных о ставках по вкладам для указанных параметров, проверьте первоисточник."
 	# Group by payout_type -> term_days -> amount bucket
