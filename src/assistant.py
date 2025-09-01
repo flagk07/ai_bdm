@@ -21,7 +21,7 @@ ALLOWED_TOPICS_HINT = (
 # ------------------------ Deposit rates helpers ------------------------
 
 def _parse_amount_rub(text: str) -> Optional[float]:
-	low = text.lower().replace("\u00a0", " ")
+	low = text.lower().replace("\u00a0", " ").replace("\u202f", " ")
 	# 1) Explicit currency forms
 	m = re.search(r"(\d[\d\s]{2,}(?:[.,]\d{1,2})?)\s*(?:руб|₽|rub)", low)
 	if m:
@@ -60,6 +60,26 @@ def _parse_payout_type(text: str) -> Optional[str]:
 	return None
 
 
+def _parse_term_days(text: str) -> Optional[int]:
+	low = text.lower()
+	# months mapping
+	mon_map = {1:31,2:61,3:91,4:122,6:181,9:274,12:367,18:550,24:730,36:1100}
+	m_mon = re.search(r"(\d+)\s*(?:мес|месяц|месяца|месяцев)\b", low)
+	if m_mon:
+		mon = int(m_mon.group(1))
+		return mon_map.get(mon, mon * 30)
+	m_day = re.search(r"(\d+)\s*(?:дн|дней|day|days)\b", low)
+	if m_day:
+		return int(m_day.group(1))
+	# plain number that looks like days
+	m_num = re.search(r"\b(\d{2,4})\b", low)
+	if m_num:
+		val = int(m_num.group(1))
+		if 10 <= val <= 2000:
+			return val
+	return None
+
+
 def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: date) -> Optional[str]:
 	lowq = user_clean.lower()
 	# Broaden trigger: treat as deposit rates query if deposit or payout phrasing is present
@@ -67,10 +87,11 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		return None
 	amt = _parse_amount_rub(user_clean)
 	pt = _parse_payout_type(user_clean)
+	term = _parse_term_days(user_clean)
 	# If neither provided, ask a single clarification
-	if amt is None and pt is None:
+	if amt is None and pt is None and term is None:
 		return (
-			"Уточните, пожалуйста: выплата процентов 1) ежемесячно или 2) в конце срока, и ориентировочная сумма (например, 300 000 ₽ или 1 200 000 ₽)."
+			"Уточните, пожалуйста: выплата процентов 1) ежемесячно или 2) в конце срока, сумма (например, 300 000 ₽), и срок (например, 181 дней)."
 		)
 	# Query rates
 	when = None  # do not filter by dates to allow rows with NULL effective_from/to
@@ -80,10 +101,13 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		channel = "Интернет-Банк"
 	# Detect currency from query (₽/$/€/¥), else no filter
 	curr = _detect_currency(user_clean)
-	rows = db.product_rates_query(pt, None, amt, when, channel=channel, currency=curr, source_like=None)
+	rows = db.product_rates_query(pt, term, amt, when, channel=channel, currency=curr, source_like=None)
 	if not rows:
-		# Fallback without filters in case user didn't specify enough context
-		rows = db.product_rates_query(pt, None, amt, None)
+		# Fallback loosen filters stepwise
+		if term is not None:
+			rows = db.product_rates_query(pt, None, amt, when, channel=channel, currency=curr, source_like=None)
+		if not rows:
+			rows = db.product_rates_query(pt, None, amt, None)
 	if not rows:
 		return "Нет данных о ставках по вкладам для указанных параметров, проверьте первоисточник."
 	# If result set is big and user didn't ask to 'show all', ask for clarifications to avoid overly long answer
@@ -96,6 +120,8 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 			missing_keys.append("выплата процентов (ежемесячно/в конце)")
 		if amt is None:
 			missing_keys.append("ориентировочная сумма (например, 1 000 000 ₽)")
+		if term is None:
+			missing_keys.append("срок (например, 181 дней)")
 		# If many rows or missing key filters — ask 1 clarifying message
 		if too_many or missing_keys:
 			# Build compact hints from data
@@ -107,7 +133,7 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 			cur_hint = ("; валюты: " + ", ".join(curropts)) if curropts else ""
 			need = "; ".join(missing_keys) if missing_keys else "уточните срок (например, 181 дней)"
 			return (
-				"Чтобы дать корректный и не слишком длинный ответ, уточните: " + need + ".\n" +
+				"Чтобы дать корректный и не слишком длинный ответ, уточните: " + need + ".\n"
 				f"Можно ответить одной строкой: ‘ежемесячно, 1 000 000 ₽, 181 дней, RUB’.\nПодсказки{term_hint}{plan_hint}{cur_hint}.\n"
 				"Напишите ‘показать все’, если нужен полный список (может быть длинно)."
 			)
