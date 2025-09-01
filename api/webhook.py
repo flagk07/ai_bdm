@@ -212,6 +212,9 @@ async def import_rates(request: Request) -> JSONResponse:
 				"source_url": item.get("source_url"),
 				"source_page": (int(item.get("source_page")) if item.get("source_page") is not None else None),
 			}
+			# optional currency
+			if item.get("currency") is not None:
+				row["currency"] = item.get("currency")
 			rows.append(row)
 		# Upsert (insert) facts
 		await asyncio.to_thread(db.product_rates_upsert, rows)
