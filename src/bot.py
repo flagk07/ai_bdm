@@ -229,6 +229,8 @@ async def run_bot() -> None:
 	@dp.message(F.text == "/cancel")
 	async def cancel_any(message: Message, state: FSMContext) -> None:
 		await state.clear()
+		# Clear assistant slots
+		db.clear_slots(message.from_user.id)
 		await message.answer("Отменено", reply_markup=main_keyboard())
 
 	@dp.message(AssistantStates.chatting)

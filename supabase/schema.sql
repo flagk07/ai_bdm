@@ -295,3 +295,16 @@ END$$;
 
 ALTER TABLE product_rates
 	ADD CONSTRAINT product_rates_term_days_check CHECK (term_days > 0); 
+
+-- Assistant slots: remember structured parameters per chat (no timeout)
+create table if not exists assistant_slots (
+  tg_id bigint primary key,
+  product_code text,
+  payout_type text check (payout_type in ('monthly','end')),
+  currency text check (currency in ('RUB','USD','EUR','CNY')),
+  term_days int check (term_days > 0),
+  amount numeric,
+  channel text,
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_assistant_slots_updated on assistant_slots(updated_at desc); 

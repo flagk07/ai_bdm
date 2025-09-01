@@ -380,3 +380,24 @@ class Database:
 			q = q.or_(f"effective_to.is.null,effective_to.gte.{when.isoformat()}")
 		res = q.execute()
 		return getattr(res, "data", []) or [] 
+
+	# Assistant slots
+	def get_slots(self, tg_id: int) -> Dict[str, Any]:
+		try:
+			res = self.client.table("assistant_slots").select("product_code,payout_type,currency,term_days,amount,channel").eq("tg_id", tg_id).maybe_single().execute()
+			return getattr(res, "data", {}) or {}
+		except Exception:
+			return {}
+
+	def set_slots(self, tg_id: int, **kwargs: Any) -> None:
+		data = {k: v for k, v in kwargs.items() if v is not None}
+		if not data:
+			return
+		data["tg_id"] = tg_id
+		self.client.table("assistant_slots").upsert(data, on_conflict="tg_id").execute()
+
+	def clear_slots(self, tg_id: int) -> None:
+		try:
+			self.client.table("assistant_slots").delete().eq("tg_id", tg_id).execute()
+		except Exception:
+			pass 

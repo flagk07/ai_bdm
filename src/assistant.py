@@ -164,6 +164,10 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 	if amt is not None:
 		header_parts.append(f"на сумму {_fmt_amount(amt, curr)}")
 	header = " ".join(header_parts) + ":"
+	# Helper to normalize percent from row
+	def _rate_pct_of(r: Dict[str, Any]) -> float:
+		val = float(r.get("rate_percent") or 0)
+		return (val * 100.0) if val <= 1.0 else val
 	# Sort by term, then rate desc, then amount_min
 	r_sorted = sorted(rows, key=lambda r: (int(r.get("term_days", 0)), -(_rate_pct_of(r)), float(r.get("amount_min") or 0)))
 	lines = [header]
@@ -606,14 +610,32 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "assistant", reply_clean, off_topic=False)
 		return reply_clean
 
+	# Merge slots: load existing and update from current message
+	slots = db.get_slots(tg_id)
+	# Extract from current message
+	curr = _detect_currency(user_clean) or slots.get("currency")
+	amt = _parse_amount_rub(user_clean) if _parse_amount_rub(user_clean) is not None else slots.get("amount")
+	pt = _parse_payout_type(user_clean) or slots.get("payout_type")
+	term = _parse_term_days(user_clean) or slots.get("term_days")
+	product_hint = slots.get("product_code")
+	for k in ["вклад","депозит","депоз"]:
+		if k in user_clean.lower():
+			product_hint = "Вклад"
+			break
+	# Persist updated slots
+	try:
+		db.set_slots(tg_id, product_code=product_hint, currency=curr, amount=amt, payout_type=pt, term_days=term)
+	except Exception:
+		pass
 	# Deterministic branch: deposit rates from FACTS (product_rates)
-	dep = _try_reply_deposit_rates(db, tg_id, user_clean, today)
-	if dep:
-		ans = sanitize_text_assistant_output(dep)
-		ans = _normalize_bullets(ans)
-		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
-		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
-		return ans
+	if product_hint == "Вклад":
+		dep = _try_reply_deposit_rates(db, tg_id, user_clean, today)
+		if dep:
+			ans = sanitize_text_assistant_output(dep)
+			ans = _normalize_bullets(ans)
+			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+			return ans
 
 	# Notes only from employee for context
 	notes = db.list_notes_period(tg_id, start, end, limit=3)
