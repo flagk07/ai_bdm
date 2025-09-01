@@ -86,6 +86,31 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		rows = db.product_rates_query(pt, None, amt, None)
 	if not rows:
 		return "Нет данных о ставках по вкладам для указанных параметров, проверьте первоисточник."
+	# If result set is big and user didn't ask to 'show all', ask for clarifications to avoid overly long answer
+	if "показать все" not in lowq:
+		too_many = len(rows) > 30
+		missing_keys = []
+		if curr is None:
+			missing_keys.append("валюта (RUB/USD/EUR/CNY)")
+		if pt is None:
+			missing_keys.append("выплата процентов (ежемесячно/в конце)")
+		if amt is None:
+			missing_keys.append("ориентировочная сумма (например, 1 000 000 ₽)")
+		# If many rows or missing key filters — ask 1 clarifying message
+		if too_many or missing_keys:
+			# Build compact hints from data
+			terms = sorted({int(r.get("term_days", 0)) for r in rows if r.get("term_days")})
+			plans = sorted({(r.get("plan_name") or "").strip() for r in rows if (r.get("plan_name") or "").strip()})
+			curropts = sorted({(r.get("currency") or "").strip() for r in rows if (r.get("currency") or "").strip()})
+			term_hint = ("; сроки: " + ", ".join(map(str, terms[:10])) + (" …" if len(terms) > 10 else "")) if terms else ""
+			plan_hint = ("; тарифы: " + ", ".join(plans[:5]) + (" …" if len(plans) > 5 else "")) if plans else ""
+			cur_hint = ("; валюты: " + ", ".join(curropts)) if curropts else ""
+			need = "; ".join(missing_keys) if missing_keys else "уточните срок (например, 181 дней)"
+			return (
+				"Чтобы дать корректный и не слишком длинный ответ, уточните: " + need + ".\n" +
+				f"Можно ответить одной строкой: ‘ежемесячно, 1 000 000 ₽, 181 дней, RUB’.\nПодсказки{term_hint}{plan_hint}{cur_hint}.\n"
+				"Напишите ‘показать все’, если нужен полный список (может быть длинно)."
+			)
 	# Group by payout_type -> term_days -> amount bucket
 	def _bucket(r: Dict[str, Any]) -> str:
 		amin = float(r.get("amount_min") or 0)
@@ -97,7 +122,8 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 	sources: Dict[str, int] = {}
 	lines: List[str] = []
 	fi = 1
-	# Build lines grouped
+	# Build lines grouped, but cap total lines to keep message short
+	MAX_OUTPUT_LINES = 20
 	current_pt = None
 	current_term = None
 	for r in rows:
@@ -124,12 +150,15 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		else:
 			lines[-1] += f"; " + (f"{plan}: " if plan else "") + f"{rate:.1f}% {ref} ({buck})"
 		fi += 1
-	# Append FACTS/SOURCES block
+		if len(lines) > MAX_OUTPUT_LINES:
+			break
+	# Append FACTS/SOURCES block, and hint if truncated
 	src_lines = [f"S{idx}: {url}" for url, idx in sources.items()]
-	facts_block = "FACTS:\n" + "\n".join(facts)
+	facts_block = "FACTS:\n" + "\n".join(facts[:MAX_OUTPUT_LINES*2])
 	sources_block = ("\n\nSOURCES:\n" + "\n".join(src_lines)) if src_lines else ""
 	body = "\n".join(lines)
-	return body + "\n\n" + facts_block + sources_block
+	tail = "\n\n(Ответ сокращён. Напишите ‘показать все’ для полного списка.)" if len(rows) > MAX_OUTPUT_LINES else ""
+	return body + tail + "\n\n" + facts_block + sources_block
 
 
 # ------------------------ System prompt builder ------------------------
