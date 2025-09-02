@@ -13,10 +13,6 @@ from .config import get_settings
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
 
-# Approx chars per token ≈ 4
-DEPOSIT_RULE_CHARS = 3200  # ~800 tokens
-DEPOSIT_RULE_OVERLAP = 480  # ~120 tokens
-
 CURRENCIES = {
 	"RUB": ["руб", "₽", "rub", "в руб", "руб.", "% год"],
 	"USD": ["usd", "$", "доллар"],
