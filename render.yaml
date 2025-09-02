@@ -20,4 +20,4 @@ services:
       - key: APP_TIMEZONE
         value: Europe/Moscow
       - key: ASSISTANT_MODEL
-        value: gpt5 
+        value: gpt-4o 
