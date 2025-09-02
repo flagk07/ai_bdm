@@ -80,14 +80,35 @@ def _parse_term_days(text: str) -> Optional[int]:
 	return None
 
 
-def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: date, force: bool = False) -> Optional[str]:
+def _detect_preferences(text: str) -> Dict[str, Any]:
+	low = text.lower()
+	prefs: Dict[str, Any] = {}
+	if any(k in low for k in ["ставк повыше", "ставк повыше", "ставка выше", "ставку выше", "повыше", "выше", "больше ставка", "ставка побольше"]):
+		prefs["rate"] = "high"
+	elif any(k in low for k in ["поменьше", "ниже ставка", "ставка ниже", "ставку ниже", "пониже"]):
+		prefs["rate"] = "low"
+	if any(k in low for k in ["пока думает", "думает", "подумать"]):
+		prefs["thinking"] = True
+	return prefs
+
+
+def _try_reply_deposit_rates(
+	db: Database,
+	tg_id: int,
+	user_clean: str,
+	today: date,
+	force: bool = False,
+	overrides: Optional[Dict[str, Any]] = None,
+	prefer: Optional[str] = None,
+) -> Optional[str]:
 	lowq = user_clean.lower()
 	# Broaden trigger: treat as deposit rates query if deposit or payout phrasing is present
 	if not force and not any(k in lowq for k in ["вклад", "депозит", "ставк", "ежемесяч", "в конце", "капитализац"]):
 		return None
-	amt = _parse_amount_rub(user_clean)
-	pt = _parse_payout_type(user_clean)
-	term = _parse_term_days(user_clean)
+	o = overrides or {}
+	amt = _parse_amount_rub(user_clean) if _parse_amount_rub(user_clean) is not None else o.get("amount")
+	pt = _parse_payout_type(user_clean) or o.get("payout_type")
+	term = _parse_term_days(user_clean) or o.get("term_days")
 	# If neither provided, ask a single clarification
 	if amt is None and pt is None and term is None:
 		return (
@@ -100,7 +121,7 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 	if "мой дом" in lowq or "интернет-банк" in lowq or "интернет банк" in lowq:
 		channel = "Интернет-Банк"
 	# Detect currency from query (₽/$/€/¥), else no filter
-	curr = _detect_currency(user_clean)
+	curr = _detect_currency(user_clean) or o.get("currency")
 	rows = db.product_rates_query(pt, term, amt, when, channel=channel, currency=curr, source_like=None)
 	if not rows:
 		# Fallback loosen filters stepwise
@@ -168,8 +189,11 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 	def _rate_pct_of(r: Dict[str, Any]) -> float:
 		val = float(r.get("rate_percent") or 0)
 		return (val * 100.0) if val <= 1.0 else val
-	# Sort by term, then rate desc, then amount_min
-	r_sorted = sorted(rows, key=lambda r: (int(r.get("term_days", 0)), -(_rate_pct_of(r)), float(r.get("amount_min") or 0)))
+	# Sort by term, then rate according to preference (default desc), then amount_min
+	if prefer == "low":
+		r_sorted = sorted(rows, key=lambda r: (int(r.get("term_days", 0)), (_rate_pct_of(r)), float(r.get("amount_min") or 0)))
+	else:
+		r_sorted = sorted(rows, key=lambda r: (int(r.get("term_days", 0)), -(_rate_pct_of(r)), float(r.get("amount_min") or 0)))
 	lines = [header]
 	# Cap the number of listed items to keep the message concise
 	MAX_OUTPUT_LINES = 20
@@ -193,7 +217,10 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 		if count >= MAX_OUTPUT_LINES:
 			break
 	# Recommend top tariffs separately (numbered)
-	top = sorted([r for r in r_sorted if (term is None or int(r.get("term_days", 0)) == term)], key=lambda r: _rate_pct_of(r), reverse=True)[:2]
+	if prefer == "low":
+		top = sorted([r for r in r_sorted if (term is None or int(r.get("term_days", 0)) == term)], key=lambda r: _rate_pct_of(r))[:2]
+	else:
+		top = sorted([r for r in r_sorted if (term is None or int(r.get("term_days", 0)) == term)], key=lambda r: _rate_pct_of(r), reverse=True)[:2]
 	reco = ""
 	if top:
 		reco_lines = []
@@ -605,7 +632,10 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		pass
 	# Deterministic branch: deposit rates from FACTS (product_rates)
 	if product_hint == "Вклад":
-		dep = _try_reply_deposit_rates(db, tg_id, user_clean, today, force=True)
+		prefs = _detect_preferences(user_clean)
+		prefer_rate = prefs.get("rate")
+		over = {"currency": curr, "amount": amt, "payout_type": pt, "term_days": term}
+		dep = _try_reply_deposit_rates(db, tg_id, user_clean, today, force=True, overrides=over, prefer=prefer_rate)
 		if dep:
 			ans = sanitize_text_assistant_output(dep)
 			ans = _normalize_bullets(ans)
