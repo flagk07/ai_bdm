@@ -655,13 +655,17 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	pt = _parse_payout_type(user_clean) or slots.get("payout_type")
 	term = _parse_term_days(user_clean) or slots.get("term_days")
 	product_hint = slots.get("product_code")
-	if not product_hint:
-		for k in ["вклад","депозит","депоз"]:
-			if k in user_clean.lower():
-				product_hint = "Вклад"
-				break
+	# Detect product intent from current message and allow switching topic
+	lowu = user_clean.lower()
+	deposit_intent = any(k in lowu for k in ["вклад","депозит","депоз"])
+	credit_intent = any(k in lowu for k in ["кн","кредит налич", "наличн", "потреб", "потребительск", "наличные"])
+	if deposit_intent:
+		product_hint = "Вклад"
+	elif credit_intent:
+		product_hint = "КН"
 	# Persist updated slots
 	try:
+		# Save even if only product intent changed
 		db.set_slots(tg_id, product_code=product_hint, currency=curr, amount=amt, payout_type=pt, term_days=term)
 	except Exception:
 		pass
@@ -676,7 +680,11 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			ans = _normalize_bullets(ans)
 			# Add a conversational coaching addendum (second contour)
 			coach = _generate_coaching_reply(client, user_clean, ans)
-			final_reply = ans + ("\n\n" + sanitize_text_assistant_output(coach) if coach else "")
+			coach_clean = sanitize_text_assistant_output(coach)
+			coach_numbered = _to_numbered(coach_clean)
+			final_reply = ans + ("\n\n" + coach_numbered if coach_numbered else "")
+			# Remove markdown emphasis just in case
+			final_reply = _strip_md_emphasis(final_reply)
 			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 			db.add_assistant_message(tg_id, "assistant", final_reply, off_topic=False)
 			return final_reply
