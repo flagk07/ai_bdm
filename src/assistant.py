@@ -62,6 +62,9 @@ def _parse_payout_type(text: str) -> Optional[str]:
 
 def _parse_term_days(text: str) -> Optional[int]:
 	low = text.lower()
+	# handle colloquial half-year
+	if "полгода" in low or "пол года" in low or "пол-год" in low:
+		return 181
 	# months mapping
 	mon_map = {1:31,2:61,3:91,4:122,6:181,9:274,12:367,18:550,24:730,36:1100}
 	m_mon = re.search(r"(\d+)\s*(?:мес|месяц|месяца|месяцев)\b", low)
@@ -189,6 +192,8 @@ def _try_reply_deposit_rates(
 	def _rate_pct_of(r: Dict[str, Any]) -> float:
 		val = float(r.get("rate_percent") or 0)
 		return (val * 100.0) if val <= 1.0 else val
+	# detect prefs for conversational tone
+	prefs_local = _detect_preferences(user_clean)
 	# Sort by term, then rate according to preference (default desc), then amount_min
 	if prefer == "low":
 		r_sorted = sorted(rows, key=lambda r: (int(r.get("term_days", 0)), (_rate_pct_of(r)), float(r.get("amount_min") or 0)))
@@ -228,10 +233,40 @@ def _try_reply_deposit_rates(
 			pname = (t.get("plan_name") or "").strip()
 			reco_lines.append(f"{i}) {pname}: {_rate_pct_of(t):.1f}%")
 		reco = "\nРекомендуемое (по ставке):\n" + "\n".join(reco_lines)
+	# Coaching block (conversational)
+	coach_lines: List[str] = []
+	if prefs_local.get("rate") == "high":
+		coach_lines.append("Если важна ставка — предложите из рекомендуемых выше; кратко обрисуйте выгоду.")
+	if prefs_local.get("thinking"):
+		coach_lines.append("Фраза: ‘Понимаю, можно зафиксировать условия сегодня, а решение принять после обсуждения — удобнее клиенту’.")
+	coach = ("\nЧто сказать клиенту:\n" + "\n".join(["- " + s for s in coach_lines])) if coach_lines else ""
 	# Actions single line
 	actions = "\nДействия сотрудника: выберите наиболее подходящий тариф из списка и помогите открыть вклад клиенту"
-	# Only SOURCES block
-	return "\n".join(lines) + ("\n" + reco if reco else "") + actions 
+	return "\n".join(lines) + ("\n" + reco if reco else "") + coach + actions 
+
+
+# ------------------------ Generative coaching helper ------------------------
+
+def _generate_coaching_reply(client: OpenAI, user_text: str, given_text: str) -> str:
+	"""Generate a short, conversational coaching block without inventing numbers.
+	- Keep it actionable (3–5 пунктов) and product-agnostic.
+	- Do NOT include links or numeric rates; refer to given_text abstractly.
+	"""
+	system = (
+		"Ты — AI BDM‑наставник. Дай короткие, живые советы по продажам и следующий шаг. "
+		"Не придумывай цифры. Не используй ссылки. Тон — деловой, дружелюбный, без воды."
+	)
+	messages = [
+		{"role": "system", "content": system},
+		{"role": "user", "content": f"Вопрос сотрудника:\n{user_text}\n\nДано (условия/ставки, без цитирования):\n{given_text}\n\nСформируй 3–5 прикладных рекомендаций и короткий следующий шаг."},
+	]
+	resp = client.chat.completions.create(
+		model="gpt-4o-mini",
+		temperature=0.5,
+		max_tokens=700,
+		messages=messages,
+	)
+	return resp.choices[0].message.content or ""
 
 
 # ------------------------ System prompt builder ------------------------
@@ -639,9 +674,12 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		if dep:
 			ans = sanitize_text_assistant_output(dep)
 			ans = _normalize_bullets(ans)
+			# Add a conversational coaching addendum (second contour)
+			coach = _generate_coaching_reply(client, user_clean, ans)
+			final_reply = ans + ("\n\n" + sanitize_text_assistant_output(coach) if coach else "")
 			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
-			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
-			return ans
+			db.add_assistant_message(tg_id, "assistant", final_reply, off_topic=False)
+			return final_reply
 
 	# Notes only from employee for context
 	notes = db.list_notes_period(tg_id, start, end, limit=3)
@@ -739,8 +777,8 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		if rate_block:
 			add += "\n\nИзвлечённые строки со ставками (используй дословно и всегда указывай валюту):\n" + rate_block
 		messages.append({"role": "system", "content": add})
-	# Keep last chat history minimal to avoid polluting topic; include last 10
-	history = db.get_assistant_messages(tg_id, limit=10)
+	# Keep broader chat history for context; include last 20
+	history = db.get_assistant_messages(tg_id, limit=20)
 	for m in history:
 		messages.append({"role": m["role"], "content": m["content_sanitized"]})
 	messages.append({"role": "user", "content": user_clean})
