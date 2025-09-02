@@ -12,6 +12,7 @@
 - `SUPABASE_URL` и `SUPABASE_API_KEY` — доступ к Supabase.
 - `ALLOWED_TG_IDS` — список Telegram ID, которым разрешён доступ (опционально).
 - `APP_TIMEZONE` — часовой пояс для расписания (по умолчанию `Europe/Moscow`).
+- `ASSISTANT_MODEL` — модель LLM для ответов ассистента (по умолчанию `gpt5`).
 
 ## Команды бота
 - `/start` — регистрация и присвоение `agentN`.

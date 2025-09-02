@@ -210,13 +210,7 @@ def _try_reply_deposit_rates(
 		plan = (r.get("plan_name") or "").strip()
 		if not plan:
 			continue
-		ref_src = (r.get("source_url") or "").strip()
-		if ref_src and ref_src not in sources:
-			sources[ref_src] = len(sources) + 1
-			si = sources[ref_src]
-		else:
-			si = sources.get(ref_src, 1) if ref_src else 1
-		# Do not show source markers to the user
+		# Note: источники не нумеруем и не выводим пользователю
 		lines.append(f"- {plan}: {_rate_pct_of(r):.1f}%")
 		count += 1
 		if count >= MAX_OUTPUT_LINES:
@@ -260,8 +254,9 @@ def _generate_coaching_reply(client: OpenAI, user_text: str, given_text: str) ->
 		{"role": "system", "content": system},
 		{"role": "user", "content": f"Вопрос сотрудника:\n{user_text}\n\nДано (условия/ставки, без цитирования):\n{given_text}\n\nСформируй 3–5 прикладных рекомендаций и короткий следующий шаг."},
 	]
+	settings = get_settings()
 	resp = client.chat.completions.create(
-		model="gpt-4o-mini",
+		model=settings.assistant_model,
 		temperature=0.5,
 		max_tokens=700,
 		messages=messages,
@@ -799,7 +794,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	messages.append({"role": "user", "content": user_clean})
 
 	resp = client.chat.completions.create(
-		model="gpt-4o-mini",
+		model=settings.assistant_model,
 		messages=messages,
 		temperature=0.3,
 		max_tokens=350,

@@ -30,6 +30,7 @@ class Settings:
 	supabase_api_key: str
 	allowed_tg_ids_bootstrap: List[int]
 	timezone: str
+	assistant_model: str
 
 
 def get_settings() -> Settings:
@@ -40,4 +41,5 @@ def get_settings() -> Settings:
 		supabase_api_key=os.getenv("SUPABASE_API_KEY", ""),
 		allowed_tg_ids_bootstrap=_parse_allowed_ids(os.getenv("ALLOWED_TG_IDS")),
 		timezone=os.getenv("APP_TIMEZONE", "Europe/Moscow"),
+		assistant_model=os.getenv("ASSISTANT_MODEL", "gpt5"),
 	) 

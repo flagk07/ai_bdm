@@ -18,4 +18,6 @@ services:
       - key: ALLOWED_TG_IDS
         sync: false
       - key: APP_TIMEZONE
-        value: Europe/Moscow 
+        value: Europe/Moscow
+      - key: ASSISTANT_MODEL
+        value: gpt5 
