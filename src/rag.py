@@ -132,15 +132,15 @@ def _extract_deposit_rule_sections(raw_text: str) -> list[tuple[str, str]]:
 	spans.sort(key=lambda x: x[0])
 	sections: list[tuple[str, str]] = []
 	if not spans:
-		# fallback: chunk by size with deposit rule sizing
+		# fallback: chunk by global size/overlap
 		s = 0
 		n = len(joined)
 		while s < n:
-			e = min(n, s + DEPOSIT_RULE_CHARS)
+			e = min(n, s + CHUNK_SIZE)
 			sections.append(("Раздел", joined[s:e]))
 			if e == n:
 				break
-			s = max(e - DEPOSIT_RULE_OVERLAP, s + 1)
+			s = max(e - CHUNK_OVERLAP, s + 1)
 		return sections
 	# build sections between headings
 	for i, (start, end, name) in enumerate(spans):
@@ -152,22 +152,22 @@ def _extract_deposit_rule_sections(raw_text: str) -> list[tuple[str, str]]:
 
 
 def _pack_rule_sections_to_chunks(sections: list[tuple[str, str]]) -> list[str]:
-	"""Pack sections to chunks of ~800 tokens with overlap ~120 tokens preserving section headers."""
+	"""Pack sections to chunks preserving section headers using global CHUNK_SIZE/CHUNK_OVERLAP."""
 	chunks: list[str] = []
 	for name, body in sections:
 		prefix = f"[{name}]\n"
 		text = prefix + body
-		if len(text) <= DEPOSIT_RULE_CHARS:
+		if len(text) <= CHUNK_SIZE:
 			chunks.append(text)
 			continue
 		# split large body
 		start = 0
 		while start < len(text):
-			end = min(len(text), start + DEPOSIT_RULE_CHARS)
+			end = min(len(text), start + CHUNK_SIZE)
 			chunks.append(text[start:end])
 			if end == len(text):
 				break
-			start = max(end - DEPOSIT_RULE_OVERLAP, start + 1)
+			start = max(end - CHUNK_OVERLAP, start + 1)
 	return chunks
 
 
