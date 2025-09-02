@@ -80,10 +80,10 @@ def _parse_term_days(text: str) -> Optional[int]:
 	return None
 
 
-def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: date) -> Optional[str]:
+def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: date, force: bool = False) -> Optional[str]:
 	lowq = user_clean.lower()
 	# Broaden trigger: treat as deposit rates query if deposit or payout phrasing is present
-	if not any(k in lowq for k in ["вклад", "депозит", "ставк", "ежемесяч", "в конце", "капитализац"]):
+	if not force and not any(k in lowq for k in ["вклад", "депозит", "ставк", "ежемесяч", "в конце", "капитализац"]):
 		return None
 	amt = _parse_amount_rub(user_clean)
 	pt = _parse_payout_type(user_clean)
@@ -618,10 +618,11 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	pt = _parse_payout_type(user_clean) or slots.get("payout_type")
 	term = _parse_term_days(user_clean) or slots.get("term_days")
 	product_hint = slots.get("product_code")
-	for k in ["вклад","депозит","депоз"]:
-		if k in user_clean.lower():
-			product_hint = "Вклад"
-			break
+	if not product_hint:
+		for k in ["вклад","депозит","депоз"]:
+			if k in user_clean.lower():
+				product_hint = "Вклад"
+				break
 	# Persist updated slots
 	try:
 		db.set_slots(tg_id, product_code=product_hint, currency=curr, amount=amt, payout_type=pt, term_days=term)
@@ -629,7 +630,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		pass
 	# Deterministic branch: deposit rates from FACTS (product_rates)
 	if product_hint == "Вклад":
-		dep = _try_reply_deposit_rates(db, tg_id, user_clean, today)
+		dep = _try_reply_deposit_rates(db, tg_id, user_clean, today, force=True)
 		if dep:
 			ans = sanitize_text_assistant_output(dep)
 			ans = _normalize_bullets(ans)
