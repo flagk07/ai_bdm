@@ -307,4 +307,82 @@ create table if not exists assistant_slots (
   channel text,
   updated_at timestamptz not null default now()
 );
-create index if not exists idx_assistant_slots_updated on assistant_slots(updated_at desc); 
+create index if not exists idx_assistant_slots_updated on assistant_slots(updated_at desc);
+
+-- ================= New migrations for FACTS ↔ RAG linkage and generalized facts =================
+-- Add doc_id and dates to product_rates (idempotent)
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns WHERE table_name = 'product_rates' AND column_name = 'doc_id'
+	) THEN
+		ALTER TABLE product_rates ADD COLUMN doc_id uuid;
+	END IF;
+	IF NOT EXISTS (
+		SELECT 1 FROM pg_indexes WHERE indexname = 'idx_product_rates_doc'
+	) THEN
+		CREATE INDEX idx_product_rates_doc ON product_rates(doc_id);
+	END IF;
+END$$;
+
+-- Extend rag_chunks with linkage and attributes (idempotent)
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_chunks' AND column_name = 'section_path'
+	) THEN
+		ALTER TABLE rag_chunks ADD COLUMN section_path text;
+	END IF;
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_chunks' AND column_name = 'effective_from'
+	) THEN
+		ALTER TABLE rag_chunks ADD COLUMN effective_from date;
+	END IF;
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_chunks' AND column_name = 'effective_to'
+	) THEN
+		ALTER TABLE rag_chunks ADD COLUMN effective_to date;
+	END IF;
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_chunks' AND column_name = 'has_numbers'
+	) THEN
+		ALTER TABLE rag_chunks ADD COLUMN has_numbers boolean generated always as (content ~ '\\d' or content ~ '%') stored;
+	END IF;
+	IF NOT EXISTS (
+		SELECT 1 FROM pg_indexes WHERE indexname = 'idx_rag_chunks_hasnum'
+	) THEN
+		CREATE INDEX idx_rag_chunks_hasnum ON rag_chunks(has_numbers);
+	END IF;
+END$$;
+
+-- Generalized product facts for non-deposit products (MVP)
+CREATE TABLE IF NOT EXISTS product_facts (
+  id uuid primary key default gen_random_uuid(),
+  doc_id uuid,
+  product_code text not null,
+  channel text,
+  currency text,
+  fact_key text not null,
+  term_days int,
+  amount_min numeric,
+  amount_max numeric,
+  value_numeric numeric,
+  value_text text,
+  effective_from date,
+  effective_to date,
+  source_url text,
+  created_at timestamptz not null default now()
+);
+CREATE INDEX IF NOT EXISTS idx_product_facts_keys ON product_facts(product_code, fact_key, currency, channel);
+CREATE INDEX IF NOT EXISTS idx_product_facts_doc ON product_facts(doc_id);
+
+-- Optional FKs (if rag_docs exists)
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'rag_docs') THEN
+		ALTER TABLE IF EXISTS product_rates DROP CONSTRAINT IF EXISTS product_rates_doc_fk;
+		ALTER TABLE IF EXISTS product_rates ADD CONSTRAINT product_rates_doc_fk FOREIGN KEY (doc_id) REFERENCES rag_docs(id) ON DELETE SET NULL;
+		ALTER TABLE IF EXISTS product_facts DROP CONSTRAINT IF EXISTS product_facts_doc_fk;
+		ALTER TABLE IF EXISTS product_facts ADD CONSTRAINT product_facts_doc_fk FOREIGN KEY (doc_id) REFERENCES rag_docs(id) ON DELETE SET NULL;
+	END IF;
+END$$; 

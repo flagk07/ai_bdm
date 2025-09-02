@@ -91,7 +91,7 @@ def _parse_term_days(text: str) -> Optional[int]:
 	# handle colloquial half-year
 	if "полгода" in low or "пол года" in low or "пол-год" in low:
 		return 181
-	# months mapping
+	# months mapping (legacy fallback)
 	mon_map = {1:31,2:61,3:91,4:122,6:181,9:274,12:367,18:550,24:730,36:1100}
 	m_mon = re.search(r"(\d+)\s*(?:мес|месяц|месяца|месяцев)\b", low)
 	if m_mon:
@@ -107,6 +107,17 @@ def _parse_term_days(text: str) -> Optional[int]:
 		if 10 <= val <= 2000:
 			return val
 	return None
+
+
+def _parse_term_days_smart(text: str, db: Database, product: str = "Вклад") -> Optional[int]:
+	m = re.search(r"(\d+)\s*(?:мес|месяц|месяца|месяцев)\b", text.lower())
+	if not m:
+		return _parse_term_days(text)
+	wanted = int(m.group(1)) * 30
+	terms = db.distinct_terms(product)
+	if not terms:
+		return None
+	return min(terms, key=lambda d: abs(d - wanted))
 
 
 def _detect_preferences(text: str) -> Dict[str, Any]:
@@ -295,18 +306,11 @@ def _generate_coaching_reply(client: OpenAI, user_text: str, given_text: str) ->
 
 def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, notes_preview: str) -> str:
 	system = (
-		"Ты — AI BDM для выездных сотрудников банка. Являешься мастером продаж: SPIN, выявление потребностей/выгоды, работа с возражениями, кросс‑ и апселл и наставником сотрудников: ориентированность на результат, мотивация к достижению цели сотрудников.\n\n"
-		"Формат ответов: Давай прикладные фразы и следующий шаг. Помогай только по работе: продукты, кросс‑продажи, результаты, цели, коучинг\n\n"
-		"Строго по рамкам: краткие выгоды/скрипты/ответы на возражения; планы/факты; SMART‑шаги. Ответы вне темы, юридические/налоговые консультации без базы и использование ПДн — запрещено.\n\n"
-		"Стиль: деловой, без воды. Короткие списки, один пункт — одна строка. Не более 1 уточнения, если данных не хватает.  Сотрудники, которые ты консультируешь, не привлекают клиентов и не управляют командой, зона их ответственности - кросс-продажа на встрече с клиентом.\n\n"
-		"Ты берешь данные: СНАЧАЛА FACTS (БД: точные цифры — ставки/лимиты/тарифы/сроки/суммы/комиссии), затем RAG (правила/исключения/описания). Если FACTS нет — ищи в RAG; если пусто — «нет данных, проверьте первоисточник».\n"
-		"Слоты (продукт, валюта, сумма, срок, тип выплаты/тарифа, канал) помни между сообщениями до /cancel; с заполненными слотами — приоритет FACTS.\n\n"
-		"Формат ответов по продуктам/в рекомендациях/автосводках:\n"
-		"1) Краткий заголовок условий (по слотам/вводу).\n"
-		"2) Список вариантов (по одному в строке): «- Название: X%/Y ₽/Z усл. [F#]/[S#]».\n"
-		"3) «Рекомендуемое: 1) … 2) …» — по релевантности/выгоде для клиента.\n"
-		"4) «Действия сотрудника: …» — конкретный следующий шаг.\n\n"
-		"Не перегружай ответ: если вариантов слишком много — спроси уточнение (валюта/сумма/срок/тип/канал).\n"
+		"Ты — AI BDM-коуч для выездных сотрудников банка. Разрешено только: продукты [КН, КК, ДК, КСП, ИК, ИЗП, НС, Вклад, КН к ЗП], кросс-продажи, личные результаты/планы/рейтинг, коучинг, улучшение качества встречи. Вне тематики — мягко верни к рабочим вопросам. ПДн не запрашивай и не используй.\n\n"
+		"Приоритет: 1) FACTS (БД: точные цифры — ставки/лимиты/комиссии/сроки/суммы) → 2) SOURCES (RAG: правила/исключения). Любая цифра сопровождается [F#], правила — [S#]. Если данных нет — ‘нет данных, проверьте первоисточник’.\n\n"
+		"Допусти 1 уточняющий вопрос ТОЛЬКО если без него нельзя дать корректный ответ (например, не указаны валюта/канал/срок/сумма/тип выплаты).\n\n"
+		"Стиль: кратко, делово, без воды, без жирного и эмодзи.\n\n"
+		"Формат:\n1) Сводка (1–2 строки)\n2) Цифры FACTS (по одному в строке, с [F#])\n3) Ключевые условия (из того же документа, с [S#])\n4) Рекомендации по продаже (3–5 пунктов, без чисел)\n5) Следующий шаг/уточнение (1 вопрос максимум)\n"
 	)
 	return system
 
@@ -353,33 +357,36 @@ def _is_stats_request(text: str) -> bool:
 
 def _is_off_topic(text: str) -> bool:
 	low = text.lower().strip()
-	# Numeric menu answer is allowed
 	if low.isdigit():
 		return False
-	# Explicit off-topic cues → True
+	product_words = ["вклад","депоз","кредит","карта","ипотек","страхов","зарплат","накопител"]
+	if any(w in low for w in product_words):
+		return False
 	off_cues = [
-		"погода", "трамп", "президент", "регрессия", "кино", "игра", "анекдот",
-		"кто такой", "кто такая", "что такое", "алла", "пугачева", "пугачёва",
+		"погода", "анекдот", "кино", "игра", "трамп", "президент",
 	]
-	for c in off_cues:
-		if c in low:
-			return True
-	# Default: treat as on-topic
-	return False
+	return any(w in low for w in off_cues)
 
 
 
 def _format_stats_reply(period_label: str, total: int, by_product: Dict[str, int], leaders: List[Dict[str, Any]]) -> str:
-	# Sort products by desc count, show all non-zero; if none, show "нет"
 	items = [(p, c) for p, c in by_product.items() if c > 0]
 	items.sort(key=lambda x: x[1], reverse=True)
 	products_str = ", ".join([f"{p}:{c}" for p, c in items]) if items else "нет"
-	leaders_str = ", ".join([f"{r['agent_name']}:{r['total']}]" for r in leaders[:3]]) if leaders else "нет"
+	leaders_str = ", ".join([f"{r['agent_name']}:{r['total']}" for r in leaders[:3]]) if leaders else "нет"
+	settings = get_settings()
+	if settings.emoji_stats:
+		return (
+			f"1. Период: {period_label} 📅\n"
+			f"2. Итого попыток: {total} 🎯\n"
+			f"3. По продуктам: {products_str} 📊\n"
+			f"4. Лидеры группы: {leaders_str} 🏅"
+		)
 	return (
-		f"1. Период: {period_label} 📅\n"
-		f"2. Итого попыток: {total} 🎯\n"
-		f"3. По продуктам: {products_str} 📊\n"
-		f"4. Лидеры группы: {leaders_str} 🏅"
+		f"1. Период: {period_label}\n"
+		f"2. Итого попыток: {total}\n"
+		f"3. По продуктам: {products_str}\n"
+		f"4. Лидеры группы: {leaders_str}"
 	)
 
 
@@ -636,6 +643,104 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 
 
 
+def _build_fact_label(product: str, f: Dict[str, Any]) -> str:
+	if product == "Вклад":
+		plan = (f.get("plan_name") or "").strip()
+		td = f.get("term_days")
+		amin = f.get("amount_min")
+		amax = f.get("amount_max")
+		label = plan
+		if td:
+			label += f", {int(td)} дн"
+		if amin is not None:
+			range_str = ""
+			try:
+				lo = f"{float(amin):,.0f}".replace(","," ")
+			except Exception:
+				lo = str(amin)
+			if amax is not None:
+				try:
+					hi = f"{float(amax):,.0f}".replace(","," ")
+				except Exception:
+					hi = str(amax)
+				range_str = f"{lo}–{hi}"
+			else:
+				range_str = f"от {lo}"
+			label += f", {range_str}"
+		return label.strip(", ")
+	# generic products
+	key = (f.get("fact_key") or "").strip()
+	td = f.get("term_days")
+	chn = (f.get("channel") or "").strip()
+	parts: List[str] = [key]
+	if td:
+		parts.append(f"{int(td)} дн")
+	if chn:
+		parts.append(chn)
+	return ", ".join([p for p in parts if p])
+
+
+def _build_fact_value(product: str, f: Dict[str, Any]) -> str:
+	if product == "Вклад":
+		val = f.get("rate_percent")
+		curr = (f.get("currency") or "").upper()
+		if val is None:
+			return ""
+		v100 = float(val) if float(val) > 1 else float(val) * 100
+		return f"{v100:.1f}% {curr}".strip()
+	# generic products
+	if f.get("value_numeric") is not None:
+		try:
+			vn = float(f["value_numeric"]) 
+			if f.get("fact_key","" ).endswith("pct"):
+				return f"{vn:.1f}%"
+			return f"{vn:.0f}"
+		except Exception:
+			pass
+	return (f.get("value_text") or "").strip()
+
+
+def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Optional[str]:
+	facts = db.select_facts(product, slots)
+	if not facts:
+		return None
+	currencies = {f.get("currency") for f in facts if f.get("currency")}
+	channels = {f.get("channel") for f in facts if f.get("channel")}
+	if len(currencies) > 1 or len(channels) > 1:
+		return "Уточните канал (интернет-банк/офис) и валюту (RUB/USD/EUR/CNY), чтобы показать точные условия."
+	f_lines: List[str] = []
+	f_map: Dict[int, Dict[str, Any]] = {}
+	for i, f in enumerate(facts[:20], start=1):
+		label = _build_fact_label(product, f)
+		value = _build_fact_value(product, f)
+		f_lines.append(f"- {label}: {value} [F{i}]")
+		f_map[i] = f
+	doc_ids = {f.get("doc_id") for f in facts if f.get("doc_id")}
+	rules = db.select_rag_rules(doc_ids, limit=6, no_numbers=True)
+	s_lines = [f"- {(r.get('summary') or '').strip()} [S{j}]" for j, r in enumerate(rules, start=1)]
+	coach = "- Сформулируйте выгоду на языке клиента\n- Один следующий шаг\n- Отработка 1 возражения\n- Перевести к смежному продукту"
+	out: List[str] = []
+	out.append("Ставки/условия (точные цифры из FACTS):\n" + "\n".join(f_lines))
+	if s_lines:
+		out.append("\nКлючевые правила (из того же документа):\n" + "\n".join(s_lines))
+	out.append("\nЧто сказать клиенту:\n" + coach)
+	out.append("\nГотов продолжить: могу уточнить срок/сумму/тип выплаты и подобрать конкретный тариф.")
+	return "\n".join(out)
+
+
+def validate_numbers(answer: str, has_facts: bool) -> str:
+	res: List[str] = []
+	for ln in answer.splitlines():
+		has_num = bool(re.search(r"\d", ln))
+		has_ref = bool(re.search(r"\[(?:F|S)\d+\]", ln))
+		if has_num and not has_ref:
+			continue
+		if has_num and has_facts and re.search(r"\[S\d+\]", ln):
+			continue
+		res.append(ln)
+	return "\n".join(res).strip()
+
+
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
 	settings = get_settings()
 	client = OpenAI(api_key=settings.openai_api_key)
@@ -663,10 +768,10 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	prev_stats = db.stats_period(tg_id, prev_start, prev_end)
 	group_rank = db.group_ranking_period(start, end)
 
-	# Direct stats reply with emojis if requested
+	# Direct stats reply
 	if _is_stats_request(user_clean):
 		reply = _format_stats_reply(period_label, int(period_stats.get("total", 0)), period_stats.get("by_product", {}), group_rank)
-		reply_clean = sanitize_text(reply)
+		reply_clean = sanitize_text(reply) if False else sanitize_text(reply)
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 		db.add_assistant_message(tg_id, "assistant", reply_clean, off_topic=False)
 		return reply_clean
@@ -679,41 +784,41 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		curr = _detect_currency(user_clean) or slots.get("currency")
 		amt = _parse_amount_rub(user_clean) if _parse_amount_rub(user_clean) is not None else slots.get("amount")
 		pt = _parse_payout_type(user_clean) or slots.get("payout_type")
-		term = _parse_term_days(user_clean) or slots.get("term_days")
+		term = _parse_term_days_smart(user_clean, db, product="Вклад") or slots.get("term_days")
+		# expanded product intents
+		PRODUCT_INTENTS = {
+			"Вклад": ["вклад","депозит","депоз"],
+			"КН": ["кн","кредит налич","наличн","потреб"],
+			"КК": ["кк","кредитн карт","кредитная карт"],
+			"ДК": ["дк","дебетов","дебетовая карт"],
+			"КСП": ["ксп","страхов","коробочн"],
+			"ИК": ["ипотек","ипотечн"],
+			"ИЗП": ["изп","зарплатн проект","зарплат"],
+			"НС": ["накопит","накопительный счет","накопит счет"],
+			"КН к ЗП": ["кн к зп","кредит к зарплат"],
+		}
 		product_hint = slots.get("product_code")
-		# Detect product intent from current message and allow switching topic
-		lowu = user_clean.lower()
-		deposit_intent = any(k in lowu for k in ["вклад","депозит","депоз"])
-		credit_intent = any(k in lowu for k in ["кн","кредит налич", "наличн", "потреб", "потребительск", "наличные"])
-		if deposit_intent:
-			product_hint = "Вклад"
-		elif credit_intent:
-			product_hint = "КН"
-		# Persist updated slots
+		for code, keys in PRODUCT_INTENTS.items():
+			if any(k in user_clean.lower() for k in keys):
+				product_hint = code
+				break
 		try:
-			# Save even if only product intent changed
 			db.set_slots(tg_id, product_code=product_hint, currency=curr, amount=amt, payout_type=pt, term_days=term)
 		except Exception:
 			pass
-		# Deterministic branch: deposit rates from FACTS (product_rates)
-		if product_hint == "Вклад":
-			prefs = _detect_preferences(user_clean)
-			prefer_rate = prefs.get("rate")
-			over = {"currency": curr, "amount": amt, "payout_type": pt, "term_days": term}
-			dep = _try_reply_deposit_rates(db, tg_id, user_clean, today, force=True, overrides=over, prefer=prefer_rate)
-			if dep:
-				ans = sanitize_text_assistant_output(dep)
-				ans = _normalize_bullets(ans)
-				# Add a conversational coaching addendum (second contour)
-				coach = _generate_coaching_reply(client, user_clean, ans)
-				coach_clean = sanitize_text_assistant_output(coach)
-				coach_numbered = _to_numbered(coach_clean)
-				final_reply = ans + ("\n\n" + coach_numbered if coach_numbered else "")
-				# Remove markdown emphasis just in case
-				final_reply = _strip_md_emphasis(final_reply)
-				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
-				db.add_assistant_message(tg_id, "assistant", final_reply, off_topic=False)
-				return final_reply
+		# Try unified financial responder first
+		fin = try_reply_financial(db, product_hint or "", {"currency": curr, "channel": slots.get("channel"), "amount": amt, "term_days": term, "payout_type": pt}) if product_hint else None
+		if fin:
+			ans = sanitize_text_assistant_output(fin)
+			ans = _normalize_bullets(ans)
+			ans = _strip_md_emphasis(ans)
+			ans = validate_numbers(ans, has_facts=True)
+			# Hide [F#]/[S#] for all except tg id == 195830791
+			if tg_id != 195830791:
+				ans = re.sub(r"\s?\[(?:F|S)\d+\]", "", ans)
+			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+			return ans
 
 	# Notes only from employee for context
 	notes = db.list_notes_period(tg_id, start, end, limit=3)
