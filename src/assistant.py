@@ -806,3 +806,30 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 	db.add_assistant_message(tg_id, "assistant", answer_clean, off_topic=False)
 	return answer_clean 
+
+
+# ------------------------ Formatting helpers ------------------------
+
+def _to_numbered(text: str) -> str:
+	if not text:
+		return ""
+	# Normalize line breaks and split
+	norm = text.replace("\r\n", "\n").replace("\r", "\n")
+	raw_lines = [ln.strip() for ln in norm.split("\n") if ln.strip()]
+	out: List[str] = []
+	idx = 1
+	for ln in raw_lines:
+		# Keep section headers ending with ':' as-is
+		if ln.endswith(":"):
+			out.append(ln)
+			continue
+		# Strip common bullet markers
+		clean = ln.lstrip("-•\t ")
+		# Convert existing '1.' or '1)' to unified 'n)'
+		m = re.match(r"^(\d{1,2})[)\.]+\s+(.*)", clean)
+		if m:
+			out.append(f"{idx}) {m.group(2)}")
+		else:
+			out.append(f"{idx}) {clean}")
+		idx += 1
+	return "\n".join(out) 
