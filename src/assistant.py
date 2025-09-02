@@ -18,6 +18,32 @@ ALLOWED_TOPICS_HINT = (
 )
 
 
+def _chat_completion_with_fallback(client: OpenAI, model: str, messages: List[Dict[str, str]], temperature: float, max_tokens: int) -> str:
+	"""Call Chat Completions with a safe fallback to gpt-4o-mini if the model is unavailable.
+	- Triggers fallback on common provider errors like model_not_found/404/does not exist.
+	"""
+	try:
+		resp = client.chat.completions.create(
+			model=model,
+			messages=messages,
+			temperature=temperature,
+			max_tokens=max_tokens,
+		)
+		return resp.choices[0].message.content or ""
+	except Exception as exc:
+		emsg = str(exc).lower()
+		if ("model_not_found" in emsg) or ("does not exist" in emsg) or ("404" in emsg):
+			# Fallback model tuned for speed/cost
+			resp = client.chat.completions.create(
+				model="gpt-4o-mini",
+				messages=messages,
+				temperature=temperature,
+				max_tokens=max_tokens,
+			)
+			return resp.choices[0].message.content or ""
+		raise
+
+
 # ------------------------ Deposit rates helpers ------------------------
 
 def _parse_amount_rub(text: str) -> Optional[float]:
@@ -255,13 +281,14 @@ def _generate_coaching_reply(client: OpenAI, user_text: str, given_text: str) ->
 		{"role": "user", "content": f"Вопрос сотрудника:\n{user_text}\n\nДано (условия/ставки, без цитирования):\n{given_text}\n\nСформируй 3–5 прикладных рекомендаций и короткий следующий шаг."},
 	]
 	settings = get_settings()
-	resp = client.chat.completions.create(
+	text = _chat_completion_with_fallback(
+		client=client,
 		model=settings.assistant_model,
+		messages=messages,
 		temperature=0.5,
 		max_tokens=700,
-		messages=messages,
 	)
-	return resp.choices[0].message.content or ""
+	return text
 
 
 # ------------------------ System prompt builder ------------------------
@@ -793,13 +820,13 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		messages.append({"role": m["role"], "content": m["content_sanitized"]})
 	messages.append({"role": "user", "content": user_clean})
 
-	resp = client.chat.completions.create(
+	answer = _chat_completion_with_fallback(
+		client=client,
 		model=settings.assistant_model,
 		messages=messages,
 		temperature=0.3,
 		max_tokens=350,
 	)
-	answer = resp.choices[0].message.content or ""
 	answer_clean = sanitize_text_assistant_output(answer)
 	answer_clean = _normalize_bullets(answer_clean)
 	answer_clean = _strip_md_emphasis(answer_clean)
