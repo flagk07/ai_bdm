@@ -619,6 +619,8 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	client = OpenAI(api_key=settings.openai_api_key)
 
 	user_clean = sanitize_text_assistant_output(user_message)
+	# Detect internal auto-summary prompts early to adjust flow
+	auto_summary = "[auto_summary]" in user_clean.lower()
 	today = date.today()
 	start, end, period_label = _parse_period(user_clean, today)
 
@@ -647,47 +649,49 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "assistant", reply_clean, off_topic=False)
 		return reply_clean
 
-	# Merge slots: load existing and update from current message
-	slots = db.get_slots(tg_id)
-	# Extract from current message
-	curr = _detect_currency(user_clean) or slots.get("currency")
-	amt = _parse_amount_rub(user_clean) if _parse_amount_rub(user_clean) is not None else slots.get("amount")
-	pt = _parse_payout_type(user_clean) or slots.get("payout_type")
-	term = _parse_term_days(user_clean) or slots.get("term_days")
-	product_hint = slots.get("product_code")
-	# Detect product intent from current message and allow switching topic
-	lowu = user_clean.lower()
-	deposit_intent = any(k in lowu for k in ["вклад","депозит","депоз"])
-	credit_intent = any(k in lowu for k in ["кн","кредит налич", "наличн", "потреб", "потребительск", "наличные"])
-	if deposit_intent:
-		product_hint = "Вклад"
-	elif credit_intent:
-		product_hint = "КН"
-	# Persist updated slots
-	try:
-		# Save even if only product intent changed
-		db.set_slots(tg_id, product_code=product_hint, currency=curr, amount=amt, payout_type=pt, term_days=term)
-	except Exception:
-		pass
-	# Deterministic branch: deposit rates from FACTS (product_rates)
-	if product_hint == "Вклад":
-		prefs = _detect_preferences(user_clean)
-		prefer_rate = prefs.get("rate")
-		over = {"currency": curr, "amount": amt, "payout_type": pt, "term_days": term}
-		dep = _try_reply_deposit_rates(db, tg_id, user_clean, today, force=True, overrides=over, prefer=prefer_rate)
-		if dep:
-			ans = sanitize_text_assistant_output(dep)
-			ans = _normalize_bullets(ans)
-			# Add a conversational coaching addendum (second contour)
-			coach = _generate_coaching_reply(client, user_clean, ans)
-			coach_clean = sanitize_text_assistant_output(coach)
-			coach_numbered = _to_numbered(coach_clean)
-			final_reply = ans + ("\n\n" + coach_numbered if coach_numbered else "")
-			# Remove markdown emphasis just in case
-			final_reply = _strip_md_emphasis(final_reply)
-			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
-			db.add_assistant_message(tg_id, "assistant", final_reply, off_topic=False)
-			return final_reply
+	# Merge slots and deterministic branches only for normal chats (not auto-summary)
+	if not auto_summary:
+		# Merge slots: load existing and update from current message
+		slots = db.get_slots(tg_id)
+		# Extract from current message
+		curr = _detect_currency(user_clean) or slots.get("currency")
+		amt = _parse_amount_rub(user_clean) if _parse_amount_rub(user_clean) is not None else slots.get("amount")
+		pt = _parse_payout_type(user_clean) or slots.get("payout_type")
+		term = _parse_term_days(user_clean) or slots.get("term_days")
+		product_hint = slots.get("product_code")
+		# Detect product intent from current message and allow switching topic
+		lowu = user_clean.lower()
+		deposit_intent = any(k in lowu for k in ["вклад","депозит","депоз"])
+		credit_intent = any(k in lowu for k in ["кн","кредит налич", "наличн", "потреб", "потребительск", "наличные"])
+		if deposit_intent:
+			product_hint = "Вклад"
+		elif credit_intent:
+			product_hint = "КН"
+		# Persist updated slots
+		try:
+			# Save even if only product intent changed
+			db.set_slots(tg_id, product_code=product_hint, currency=curr, amount=amt, payout_type=pt, term_days=term)
+		except Exception:
+			pass
+		# Deterministic branch: deposit rates from FACTS (product_rates)
+		if product_hint == "Вклад":
+			prefs = _detect_preferences(user_clean)
+			prefer_rate = prefs.get("rate")
+			over = {"currency": curr, "amount": amt, "payout_type": pt, "term_days": term}
+			dep = _try_reply_deposit_rates(db, tg_id, user_clean, today, force=True, overrides=over, prefer=prefer_rate)
+			if dep:
+				ans = sanitize_text_assistant_output(dep)
+				ans = _normalize_bullets(ans)
+				# Add a conversational coaching addendum (second contour)
+				coach = _generate_coaching_reply(client, user_clean, ans)
+				coach_clean = sanitize_text_assistant_output(coach)
+				coach_numbered = _to_numbered(coach_clean)
+				final_reply = ans + ("\n\n" + coach_numbered if coach_numbered else "")
+				# Remove markdown emphasis just in case
+				final_reply = _strip_md_emphasis(final_reply)
+				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+				db.add_assistant_message(tg_id, "assistant", final_reply, off_topic=False)
+				return final_reply
 
 	# Notes only from employee for context
 	notes = db.list_notes_period(tg_id, start, end, limit=3)
@@ -701,33 +705,36 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	prev_line = f"Предыдущий период: всего {prev_stats['total']}; по продуктам {prev_stats['by_product']}"
 	best = ", ".join([f"{r['agent_name']}:{r['total']} ]" for r in group_rank[:2]]) if group_rank else "нет данных"
 	group_line = f"Лидеры группы за {period_label}: {best}"
-	# RAG context (silent for user, no sources in text)
+	# RAG context (silent for user): do not set product_hint/guards for auto-summary
 	product_hint = None
-	for k in ["КН","кн","кредит налич","наличн","налич","потреб","потребительск","потребительский","потр","наличные"]:
-		if k in user_clean.lower():
-			product_hint = "КН"
-			break
-	# deposits
-	if not product_hint:
-		for k in ["вклад","депозит","депоз" ]:
+	if not auto_summary:
+		for k in ["КН","кн","кредит налич","наличн","налич","потреб","потребительск","потребительский","потр","наличные"]:
 			if k in user_clean.lower():
-				product_hint = "Вклад"
+				product_hint = "КН"
 				break
+		# deposits
+		if not product_hint:
+			for k in ["вклад","депозит","депоз" ]:
+				if k in user_clean.lower():
+					product_hint = "Вклад"
+					break
 	rag_texts, rag_meta = _rag_top_chunks(db, product_hint, user_clean, limit_docs=3, limit_chunks=5)
 	ctx_text = "\n\n".join(rag_texts) if rag_texts else ""
-	# Clarify currency if ambiguous
-	detected_curr = _detect_currency(user_clean)
-	if (not detected_curr) and rag_meta.get("currencies") and len(rag_meta["currencies"]) > 1:
-		question = "Уточните валюту вклада: 1) RUB (₽), 2) USD ($), 3) EUR (€), 4) CNY (¥)?"
-		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
-		db.add_assistant_message(tg_id, "assistant", question, off_topic=False)
-		return question
-	# Guard: не выводим числовые ставки по КН/Вклад, если нет RAG‑строк со ставками
-	if product_hint in ("КН","Вклад") and not rag_meta.get("rates"):
-		msg = "Чтобы дать точные цифры, уточните, пожалуйста: валюта/тариф/канал. После уточнения пришлю ставки из справки."
-		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
-		db.add_assistant_message(tg_id, "assistant", msg, off_topic=False)
-		return msg
+	# Clarify currency/guards only in normal chats
+	if not auto_summary:
+		# Clarify currency if ambiguous
+		detected_curr = _detect_currency(user_clean)
+		if (not detected_curr) and rag_meta.get("currencies") and len(rag_meta["currencies"]) > 1:
+			question = "Уточните валюту: 1) RUB (₽), 2) USD ($), 3) EUR (€), 4) CNY (¥)?"
+			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+			db.add_assistant_message(tg_id, "assistant", question, off_topic=False)
+			return question
+		# Guard for KN/Deposit numeric citations
+		if product_hint in ("КН","Вклад") and not rag_meta.get("rates"):
+			msg = "Уточните параметры (валюта/тариф/канал), пришлю цифры."
+			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+			db.add_assistant_message(tg_id, "assistant", msg, off_topic=False)
+			return msg
 	try:
 		db.log(tg_id, "rag_ctx", {"count": len(rag_texts) if rag_texts else 0, "previews": [t[:200] for t in (rag_texts or [])], "currencies": rag_meta.get("currencies", []), "via": rag_meta.get("via")})
 	except Exception:
