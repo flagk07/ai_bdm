@@ -9,6 +9,9 @@ from supabase import create_client, Client
 from .config import get_settings
 from .pii import sanitize_text
 
+# In-memory fallback for assistant slots (per-process)
+_LOCAL_SLOTS: Dict[int, Dict[str, Any]] = {}
+
 
 # Simple RU 2025 workdays calendar: Mon-Fri are working days; exclude official holidays
 _RU_2025_HOLIDAYS = {
