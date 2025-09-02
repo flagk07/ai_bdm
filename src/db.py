@@ -385,19 +385,32 @@ class Database:
 	def get_slots(self, tg_id: int) -> Dict[str, Any]:
 		try:
 			res = self.client.table("assistant_slots").select("product_code,payout_type,currency,term_days,amount,channel").eq("tg_id", tg_id).maybe_single().execute()
-			return getattr(res, "data", {}) or {}
+			row = getattr(res, "data", {}) or {}
+			if row:
+				return row
 		except Exception:
-			return {}
+			pass
+		# fallback
+		return _LOCAL_SLOTS.get(int(tg_id), {})
 
 	def set_slots(self, tg_id: int, **kwargs: Any) -> None:
 		data = {k: v for k, v in kwargs.items() if v is not None}
 		if not data:
 			return
-		data["tg_id"] = tg_id
-		self.client.table("assistant_slots").upsert(data, on_conflict="tg_id").execute()
+		data["tg_id"] = int(tg_id)
+		# try DB first
+		try:
+			self.client.table("assistant_slots").upsert(data, on_conflict="tg_id").execute()
+		except Exception:
+			pass
+		# always update local fallback
+		cur = _LOCAL_SLOTS.get(int(tg_id), {})
+		cur.update({k: v for k, v in data.items() if k != "tg_id"})
+		_LOCAL_SLOTS[int(tg_id)] = cur
 
 	def clear_slots(self, tg_id: int) -> None:
 		try:
 			self.client.table("assistant_slots").delete().eq("tg_id", tg_id).execute()
 		except Exception:
-			pass 
+			pass
+		_LOCAL_SLOTS.pop(int(tg_id), None) 

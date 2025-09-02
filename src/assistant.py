@@ -201,9 +201,7 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 	# Actions single line
 	actions = "\nДействия сотрудника: выберите наиболее подходящий тариф из списка и помогите открыть вклад клиенту"
 	# Only SOURCES block
-	src_lines = [f"S{idx}: {url}" for url, idx in sources.items()]
-	sources_block = ("\n\nSOURCES:\n" + "\n".join(src_lines)) if src_lines else ""
-	return "\n".join(lines) + ("\n" + reco if reco else "") + actions + sources_block
+	return "\n".join(lines) + ("\n" + reco if reco else "") + actions 
 
 
 # ------------------------ System prompt builder ------------------------
