@@ -171,6 +171,8 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 	# Sort by term, then rate desc, then amount_min
 	r_sorted = sorted(rows, key=lambda r: (int(r.get("term_days", 0)), -(_rate_pct_of(r)), float(r.get("amount_min") or 0)))
 	lines = [header]
+	# Cap the number of listed items to keep the message concise
+	MAX_OUTPUT_LINES = 20
 	count = 0
 	for r in r_sorted:
 		term_r = int(r.get("term_days", 0))
@@ -185,7 +187,8 @@ def _try_reply_deposit_rates(db: Database, tg_id: int, user_clean: str, today: d
 			si = sources[ref_src]
 		else:
 			si = sources.get(ref_src, 1) if ref_src else 1
-		lines.append(f"- {plan}: {_rate_pct_of(r):.1f}%" + (f" [S{si}]" if ref_src else ""))
+		# Do not show source markers to the user
+		lines.append(f"- {plan}: {_rate_pct_of(r):.1f}%")
 		count += 1
 		if count >= MAX_OUTPUT_LINES:
 			break
