@@ -558,7 +558,7 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 	"""
 	currency = _detect_currency(query)
 	# 1) vector search with strict product filter (no cross-product fallback)
-	vec_rows = _vector_top_chunks(db, product_hint, currency, query, k=limit_chunks)
+	vec_rows = []  # disabled chunk vector search since rag_chunks removed
 	if vec_rows:
 		texts = [r.get("content", "") for r in vec_rows if r.get("content")]
 		currs = {r.get("currency") for r in vec_rows if r.get("currency")}
@@ -568,77 +568,25 @@ def _rag_top_chunks(db: Database, product_hint: Optional[str], query: str, limit
 				rate_lines.append(rl)
 		meta = {"currencies": list({c for c in currs if c}), "rates": rate_lines[:10], "via": "vector", "sources": []}
 		return texts, meta
-	# keywords from query: words >=3 chars
-	words = [w for w in re.findall(r"[А-Яа-яA-Za-z0-9%]+", query.lower()) if len(w) >= 3]
-	ids: List[str] = []
+	# Fallback: use recent rag_docs by product
 	base_docs: List[Dict[str, Any]] = []
-	try:
-		base = _rag_snippets(db, product_hint, limit=limit_docs)
-		base_docs = base
-		ids = [r.get("id") for r in base if r.get("id")]
-	except Exception:
-		ids = []
-		base_docs = []
-	chunks: List[Dict[str, str]] = []
-	if ids:
-		try:
-			res = db.client.table("rag_chunks").select("content, chunk_index, product_code, doc_id, currency").in_("doc_id", ids).limit(200).execute()
-			rows = getattr(res, "data", []) or []
-			for r in rows:
-				chunks.append({"content": r.get("content",""), "chunk_index": int(r.get("chunk_index", 0)), "currency": r.get("currency")})
-		except Exception:
-			chunks = []
-	if not chunks:
-		# fallback: first 1200 of docs
-		docs = _rag_snippets(db, product_hint, limit=limit_docs)
-		texts = [d.get("content","")[:1200] for d in docs if d.get("content")] [:limit_chunks]
-		meta = {"currencies": [], "rates": [], "via": "docs", "sources": [{"title": d.get("title",""), "url": d.get("url",""), "id": d.get("id")} for d in docs]}
-		return texts, meta
-	# score chunks
-	scored: List[Tuple[int, Dict[str,str]]] = []
-	for ch in chunks:
-		text = ch["content"].lower()
-		score = sum(text.count(w) for w in words) if words else 0
-		# bonus for rate-like tokens to prioritize concrete terms
-		if "%" in text:
-			score += 5
-		if "ставк" in text:
-			score += 3
-		if "годовы" in text:
-			score += 2
-		# prefer tariff/financial terms
-		if "тариф" in text or "финансов" in text:
-			score += 3
-		# currency agreement bonus/penalty
-		if currency:
-			if currency == "RUB" and ("руб" in text or "₽" in text):
-				score += 4
-			elif currency == "USD" and ("$" in text or "usd" in text or "доллар" in text):
-				score += 4
-			elif currency == "EUR" and ("€" in text or "eur" in text or "евро" in text):
-				score += 4
-			elif currency == "CNY" and ("¥" in text or "cny" in text or "юан" in text):
-				score += 4
-			else:
-				score -= 3
-		scored.append((score, ch))
-	scored.sort(key=lambda x: x[0], reverse=True)
-	top_rows = [c for _, c in scored[:limit_chunks]]
-	texts = [r["content"] for r in top_rows]
-	currs = {r.get("currency") for r in top_rows if r.get("currency")}
+	if product_hint:
+		base_docs = db.select_rag_docs_by_product(product_hint, limit=limit_docs)
+	# If no docs by product, return empty context
+	if not base_docs:
+		return [], {"currencies": [], "rates": [], "via": "docs", "sources": []}
+	# Use first N docs' content snippets
+	texts = [(d.get("content") or "")[:1200] for d in base_docs][:limit_chunks]
 	rate_lines: list[str] = []
 	for t in texts:
 		for rl in _extract_rate_lines(t):
 			rate_lines.append(rl)
-	# optional trace: store first 200 chars of each chosen chunk
-	try:
-		if texts:
-			preview = [t[:200] for t in texts]
-			# We cannot import db here; tracing is handled at call site in get_assistant_reply
-			pass
-	except Exception:
-		pass
-	meta = {"currencies": list({c for c in currs if c}), "rates": rate_lines[:10], "via": "keywords", "sources": [{"title": d.get("title",""), "url": d.get("url",""), "id": d.get("id")} for d in (base_docs or [])]}
+	meta = {
+		"currencies": [],
+		"rates": rate_lines[:10],
+		"via": "docs",
+		"sources": [{"title": d.get("title", ""), "url": d.get("url", ""), "id": d.get("id")} for d in base_docs],
+	}
 	return texts, meta
 
 
@@ -715,9 +663,9 @@ def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Op
 		value = _build_fact_value(product, f)
 		f_lines.append(f"- {label}: {value} [F{i}]")
 		f_map[i] = f
-	doc_ids = {f.get("doc_id") for f in facts if f.get("doc_id")}
-	rules = db.select_rag_rules(doc_ids, limit=6, no_numbers=True)
-	s_lines = [f"- {(r.get('summary') or '').strip()} [S{j}]" for j, r in enumerate(rules, start=1)]
+	# Use RAG docs as supplementary rules context via product_code
+	rules_docs = db.select_rag_docs_by_product(product, limit=6)
+	s_lines = [f"- {(rd.get('title') or '').strip()} [S{j}]" for j, rd in enumerate(rules_docs, start=1)]
 	coach = "- Сформулируйте выгоду на языке клиента\n- Один следующий шаг\n- Отработка 1 возражения\n- Перевести к смежному продукту"
 	out: List[str] = []
 	out.append("Ставки/условия (точные цифры из FACTS):\n" + "\n".join(f_lines))
@@ -835,7 +783,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# RAG context (silent for user): do not set product_hint/guards for auto-summary
 	product_hint = None
 	if not auto_summary:
-		for k in ["КН","кн","кредит налич","наличн","налич","потреб","потребительск","потребительский","потр","наличные"]:
+		for k in ["КН","кн","кредит налич","наличн","налич","потреб","потребителск","потребительский","потр","наличные"]:
 			if k in user_clean.lower():
 				product_hint = "КН"
 				break

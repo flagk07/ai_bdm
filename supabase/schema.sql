@@ -1,6 +1,6 @@
 -- Ensure required extensions
 create extension if not exists pgcrypto;
-create extension if not exists vector;
+-- create extension if not exists vector;
 
 -- Sequence for unique agent numbers
 create sequence if not exists agent_number_seq start 1 increment 1;
@@ -184,85 +184,14 @@ alter table rag_docs enable row level security;
 drop policy if exists anon_all_rag_docs on rag_docs;
 create policy anon_all_rag_docs on rag_docs for all using (true) with check (true); 
 
--- RAG chunks (normalized chunks for retrieval)
-create table if not exists rag_chunks (
-  id uuid primary key default gen_random_uuid(),
-  doc_id uuid not null references rag_docs(id) on delete cascade,
-  product_code text,
-  chunk_index int not null,
-  content text not null,
-  created_at timestamptz not null default now()
-);
-create index if not exists idx_rag_chunks_doc on rag_chunks (doc_id, chunk_index);
-create index if not exists idx_rag_chunks_prod on rag_chunks (product_code);
+-- RAG chunks and vector RPC removed; using rag_docs only for context
 
-alter table rag_chunks enable row level security;
-drop policy if exists anon_all_rag_chunks on rag_chunks;
-create policy anon_all_rag_chunks on rag_chunks for all using (true) with check (true);
-
--- Add currency and embedding to rag_chunks (idempotent)
-DO $$
-BEGIN
-	IF NOT EXISTS (
-		SELECT 1 FROM information_schema.columns
-		WHERE table_name = 'rag_chunks' AND column_name = 'currency'
-	) THEN
-		ALTER TABLE rag_chunks ADD COLUMN currency text;
-	END IF;
-END$$;
-
-DO $$
-BEGIN
-	IF NOT EXISTS (
-		SELECT 1 FROM information_schema.columns
-		WHERE table_name = 'rag_chunks' AND column_name = 'embedding'
-	) THEN
-		ALTER TABLE rag_chunks ADD COLUMN embedding vector(1536);
-	END IF;
-END$$;
-
-create index if not exists idx_rag_chunks_currency on rag_chunks (currency);
--- Approximate vector index for cosine distance
-DO $$
-BEGIN
-	IF NOT EXISTS (
-		SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_rag_chunks_embedding'
-	) THEN
-		EXECUTE 'create index idx_rag_chunks_embedding on rag_chunks using ivfflat (embedding vector_cosine_ops) with (lists = 100)';
-	END IF;
-END$$;
-
--- RPC for vector search with filters
-create or replace function match_rag_chunks(
-	product text,
-	currency_in text,
-	query_embedding vector(1536),
-	match_count int
-) returns table (
-	id uuid,
-	doc_id uuid,
-	content text,
-	product_code text,
-	currency text,
-	chunk_index int,
-	distance float
-) language sql stable as $$
-  select c.id, c.doc_id, c.content, c.product_code, c.currency, c.chunk_index,
-         c.embedding <=> query_embedding as distance
-  from rag_chunks c
-  where (product is null or c.product_code = product)
-    and (currency_in is null or c.currency = currency_in)
-    and c.embedding is not null
-  order by c.embedding <=> query_embedding
-  limit match_count
-$$;
-
--- Normalized product rates for deposits (FACTS)
-create table if not exists product_rates (
+-- Normalized deposit rates (FACTS)
+create table if not exists depo_rates (
   id uuid primary key default gen_random_uuid(),
   product_code text not null check (product_code in ('Вклад')),
   payout_type text not null check (payout_type in ('monthly','end')),
-  term_days int not null check (term_days in (61,91,122,181,274,367,550,730,1100)),
+  term_days int not null,
   amount_min numeric not null,
   amount_max numeric,
   amount_inclusive_end boolean not null default true,
@@ -272,14 +201,16 @@ create table if not exists product_rates (
   effective_to date,
   source_url text,
   source_page int,
+  doc_id uuid,
   created_at timestamptz not null default now()
 );
-create index if not exists idx_product_rates_prod on product_rates(product_code, payout_type, term_days);
-create index if not exists idx_product_rates_eff on product_rates(effective_from desc);
+create index if not exists idx_depo_rates_prod on depo_rates(product_code, payout_type, term_days);
+create index if not exists idx_depo_rates_eff on depo_rates(effective_from desc);
+create index if not exists idx_depo_rates_doc on depo_rates(doc_id);
 
-alter table product_rates enable row level security;
- drop policy if exists anon_all_product_rates on product_rates;
-create policy anon_all_product_rates on product_rates for all using (true) with check (true); 
+alter table depo_rates enable row level security;
+drop policy if exists anon_all_depo_rates on depo_rates;
+create policy anon_all_depo_rates on depo_rates for all using (true) with check (true);
 
 -- Relax term_days constraint to allow any positive integer
 DO $$
@@ -287,14 +218,14 @@ BEGIN
 	IF EXISTS (
 		SELECT 1 FROM information_schema.table_constraints tc
 		JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
-		WHERE tc.table_name = 'product_rates' AND tc.constraint_type = 'CHECK' AND ccu.column_name = 'term_days'
+		WHERE tc.table_name = 'depo_rates' AND tc.constraint_type = 'CHECK' AND ccu.column_name = 'term_days'
 	) THEN
-		ALTER TABLE product_rates DROP CONSTRAINT IF EXISTS product_rates_term_days_check;
+		ALTER TABLE depo_rates DROP CONSTRAINT IF EXISTS depo_rates_term_days_check;
 	END IF;
 END$$;
 
-ALTER TABLE product_rates
-	ADD CONSTRAINT product_rates_term_days_check CHECK (term_days > 0); 
+ALTER TABLE depo_rates
+	ADD CONSTRAINT depo_rates_term_days_check CHECK (term_days > 0);
 
 -- Assistant slots: remember structured parameters per chat (no timeout)
 create table if not exists assistant_slots (
@@ -380,8 +311,8 @@ CREATE INDEX IF NOT EXISTS idx_product_facts_doc ON product_facts(doc_id);
 DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'rag_docs') THEN
-		ALTER TABLE IF EXISTS product_rates DROP CONSTRAINT IF EXISTS product_rates_doc_fk;
-		ALTER TABLE IF EXISTS product_rates ADD CONSTRAINT product_rates_doc_fk FOREIGN KEY (doc_id) REFERENCES rag_docs(id) ON DELETE SET NULL;
+		ALTER TABLE IF EXISTS depo_rates DROP CONSTRAINT IF EXISTS depo_rates_doc_fk;
+		ALTER TABLE IF EXISTS depo_rates ADD CONSTRAINT depo_rates_doc_fk FOREIGN KEY (doc_id) REFERENCES rag_docs(id) ON DELETE SET NULL;
 		ALTER TABLE IF EXISTS product_facts DROP CONSTRAINT IF EXISTS product_facts_doc_fk;
 		ALTER TABLE IF EXISTS product_facts ADD CONSTRAINT product_facts_doc_fk FOREIGN KEY (doc_id) REFERENCES rag_docs(id) ON DELETE SET NULL;
 	END IF;

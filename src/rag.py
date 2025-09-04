@@ -168,7 +168,7 @@ def _pack_rule_sections_to_chunks(sections: list[tuple[str, str]]) -> list[str]:
 
 
 def ingest_kn_docs(db: Database) -> int:
-	"""Ingest KN (КН) documents from rag_docs into rag_chunks. Returns number of docs processed."""
+	"""Ingest KN (КН) documents from rag_docs. Returns number of docs processed (content ensured)."""
 	try:
 		docs = db.client.table("rag_docs").select("id,url,title,content,mime").eq("product_code", "КН").execute()
 		rows: List[Dict] = getattr(docs, "data", []) or []
@@ -191,32 +191,7 @@ def ingest_kn_docs(db: Database) -> int:
 					continue
 			if not text or not doc_id:
 				continue
-			# clear previous chunks for this doc
-			try:
-				db.client.table("rag_chunks").delete().eq("doc_id", doc_id).execute()
-			except Exception:
-				pass
-			parts = _chunk_text(text)
-			embeds = _embed_texts(parts)
-			bulk = []
-			for idx, part in enumerate(parts):
-				if not part.strip():
-					continue
-				rowc = {
-					"doc_id": doc_id,
-					"product_code": "КН",
-					"chunk_index": idx,
-					"content": part,
-				}
-				cur = _infer_currency(part)
-				if cur:
-					rowc["currency"] = cur
-				emb = embeds[idx] if idx < len(embeds) else None
-				if emb:
-					rowc["embedding"] = emb
-				bulk.append(rowc)
-			if bulk:
-				db.client.table("rag_chunks").insert(bulk).execute()
+			# No rag_chunks anymore; just count as processed
 			count += 1
 		except Exception:
 			continue
@@ -224,7 +199,7 @@ def ingest_kn_docs(db: Database) -> int:
 
 
 def ingest_deposit_docs(db: Database) -> int:
-	"""Ingest Deposit (Вклад) documents from rag_docs into rag_chunks using rule-section chunking. Returns number of docs processed."""
+	"""Ingest Deposit (Вклад) documents from rag_docs (ensure content present). Returns number of docs processed."""
 	try:
 		docs = db.client.table("rag_docs").select("id,url,title,content,mime").eq("product_code", "Вклад").execute()
 		rows: List[Dict] = getattr(docs, "data", []) or []
@@ -246,34 +221,7 @@ def ingest_deposit_docs(db: Database) -> int:
 					continue
 			if not text or not doc_id:
 				continue
-			# clear previous chunks for this doc
-			try:
-				db.client.table("rag_chunks").delete().eq("doc_id", doc_id).execute()
-			except Exception:
-				pass
-			# extract rule sections and pack to chunks
-			sections = _extract_deposit_rule_sections(text)
-			parts = _pack_rule_sections_to_chunks(sections)
-			embeds = _embed_texts(parts)
-			bulk = []
-			for idx, part in enumerate(parts):
-				if not part.strip():
-					continue
-				rowc = {
-					"doc_id": doc_id,
-					"product_code": "Вклад",
-					"chunk_index": idx,
-					"content": part,
-				}
-				cur = _infer_currency(part)
-				if cur:
-					rowc["currency"] = cur
-				emb = embeds[idx] if idx < len(embeds) else None
-				if emb:
-					rowc["embedding"] = emb
-				bulk.append(rowc)
-			if bulk:
-				db.client.table("rag_chunks").insert(bulk).execute()
+			# No rag_chunks anymore; just count as processed
 			count += 1
 		except Exception:
 			continue

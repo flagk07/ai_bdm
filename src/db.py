@@ -344,7 +344,7 @@ class Database:
 	def product_rates_upsert(self, rows: List[Dict[str, Any]]) -> None:
 		if not rows:
 			return
-		self.client.table("product_rates").insert(rows).execute()
+		self.client.table("depo_rates").insert(rows).execute()
 
 	def product_rates_query(
 		self,
@@ -358,7 +358,7 @@ class Database:
 	) -> List[Dict[str, Any]]:
 		q = (
 			self.client
-			.table("product_rates")
+			.table("depo_rates")
 			.select(
 				"id, product_code, plan_name, payout_type, term_days, amount_min, amount_max, amount_inclusive_end, rate_percent, channel, currency, effective_from, effective_to, source_url, source_page, doc_id"
 			)
@@ -388,7 +388,7 @@ class Database:
 	def distinct_terms(self, product_code: str) -> List[int]:
 		try:
 			if product_code == "Вклад":
-				res = self.client.table("product_rates").select("term_days").eq("product_code", "Вклад").order("term_days").execute()
+				res = self.client.table("depo_rates").select("term_days").eq("product_code", "Вклад").order("term_days").execute()
 				vals = sorted({int(r.get("term_days", 0)) for r in (getattr(res, "data", []) or []) if r.get("term_days")})
 				return vals
 			else:
@@ -398,7 +398,7 @@ class Database:
 		except Exception:
 			return []
 
-	# New: select_facts for any product (Вклад -> product_rates, others -> product_facts)
+	# New: select_facts for any product (Вклад -> depo_rates, others -> product_facts)
 	def select_facts(self, product: str, slots: Dict[str, Any]) -> List[Dict[str, Any]]:
 		when: Optional[date] = None
 		channel = slots.get("channel")
@@ -409,7 +409,7 @@ class Database:
 		try:
 			if product == "Вклад":
 				return self.product_rates_query(payout_type, term_days, amount, when, channel, currency, None)
-			# generic facts
+			# generic facts (keep for future non-deposit products)
 			q = (
 				self.client.table("product_facts").select("id, doc_id, product_code, channel, currency, fact_key, term_days, amount_min, amount_max, value_numeric, value_text, effective_from, effective_to, source_url")
 				.eq("product_code", product)
@@ -428,22 +428,26 @@ class Database:
 		except Exception:
 			return []
 
-	# New: select RAG rules by doc_ids (optionally filter out numbers)
-	def select_rag_rules(self, doc_ids: set[str], limit: int = 6, no_numbers: bool = True) -> List[Dict[str, Any]]:
-		ids = list(doc_ids or [])
-		if not ids:
-			return []
+	# New: simple RAG docs fetch by product_code (no rag_chunks usage)
+	def select_rag_docs_by_product(self, product_code: str, limit: int = 6) -> List[Dict[str, Any]]:
 		try:
-			q = self.client.table("rag_chunks").select("doc_id, content, section_path").in_("doc_id", ids)
-			if no_numbers:
-				q = q.eq("has_numbers", False)
-			q = q.order("chunk_index").limit(limit)
-			res = q.execute()
-			rows = getattr(res, "data", []) or []
-			# simple summarization field
-			return [{"doc_id": r.get("doc_id"), "summary": (r.get("content") or "").strip()[:220], "section_path": r.get("section_path", "")} for r in rows]
+			res = (
+				self.client
+				.table("rag_docs")
+				.select("id, url, title, content, product_code")
+				.eq("product_code", product_code)
+				.order("fetched_at", desc=True)
+				.limit(limit)
+				.execute()
+			)
+			return getattr(res, "data", []) or []
 		except Exception:
 			return []
+
+	# New: select RAG rules by doc_ids (deprecated: rag_chunks removed) — keep for backward compatibility to return empty
+	def select_rag_rules(self, doc_ids: set[str], limit: int = 6, no_numbers: bool = True) -> List[Dict[str, Any]]:
+		# rag_chunks removed; return empty to force assistant to use select_rag_docs_by_product
+		return []
 
 	# Assistant slots
 	def get_slots(self, tg_id: int) -> Dict[str, Any]:

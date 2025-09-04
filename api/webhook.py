@@ -237,30 +237,25 @@ async def cleanup_deposits(request: Request) -> JSONResponse:
 		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
 	try:
 		def _do() -> dict:
-			# delete product_rates for deposits
+			# delete depo_rates for deposits
 			try:
-				db.client.table("product_rates").delete().eq("product_code", "Вклад").execute()
+				db.client.table("depo_rates").delete().eq("product_code", "Вклад").execute()
 			except Exception:
 				pass
-			# delete rag_docs and related rag_chunks for deposits
+			# delete rag_docs for deposits (rag_chunks no longer used)
 			try:
 				# find deposit docs
 				docs = db.client.table("rag_docs").select("id").eq("product_code", "Вклад").execute()
 				ids = [r["id"] for r in (getattr(docs, "data", []) or [])]
-				for did in ids:
-					try:
-						db.client.table("rag_chunks").delete().eq("doc_id", did).execute()
-					except Exception:
-						pass
 				# delete docs
 				db.client.table("rag_docs").delete().eq("product_code", "Вклад").execute()
 			except Exception:
 				pass
 			return {"rates_deleted": True, "docs_deleted": True}
 		res = await asyncio.to_thread(_do)
-		return JSONResponse({"ok": True, **(res or {})})
+		return JSONResponse({"ok": True, **res})
 	except Exception as e:
-		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.post("/api/ingest_deposit_custom")
@@ -321,29 +316,7 @@ async def ingest_deposit_custom(request: Request) -> JSONResponse:
 							pass
 					if not doc_id:
 						continue
-					# clear previous chunks for this doc
-					try:
-						db.client.table("rag_chunks").delete().eq("doc_id", doc_id).execute()
-					except Exception:
-						pass
-					# sections/chunks for rules
-					sections = rag_mod._extract_deposit_rule_sections(text)
-					parts = rag_mod._pack_rule_sections_to_chunks(sections)
-					embeds = rag_mod._embed_texts(parts)
-					bulk = []
-					for idx, part in enumerate(parts):
-						if not part.strip():
-							continue
-						rowc = {"doc_id": doc_id, "product_code": "Вклад", "chunk_index": idx, "content": part}
-						cur = rag_mod._infer_currency(part)
-						if cur:
-							rowc["currency"] = cur
-						emb = embeds[idx] if idx < len(embeds) else None
-						if emb:
-							rowc["embedding"] = emb
-						bulk.append(rowc)
-					if bulk:
-						db.client.table("rag_chunks").insert(bulk).execute()
+					# no rag_chunks creation
 					count += 1
 				except Exception:
 					continue
