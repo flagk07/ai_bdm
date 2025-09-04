@@ -391,14 +391,12 @@ class Database:
 				res = self.client.table("depo_rates").select("term_days").eq("product_code", "Вклад").order("term_days").execute()
 				vals = sorted({int(r.get("term_days", 0)) for r in (getattr(res, "data", []) or []) if r.get("term_days")})
 				return vals
-			else:
-				res = self.client.table("product_facts").select("term_days").eq("product_code", product_code).order("term_days").execute()
-				vals = sorted({int(r.get("term_days", 0)) for r in (getattr(res, "data", []) or []) if r.get("term_days")})
-				return vals
+			# No generic facts table; return empty for other products
+			return []
 		except Exception:
 			return []
 
-	# New: select_facts for any product (Вклад -> depo_rates, others -> product_facts)
+	# New: select_facts for any product (Вклад -> depo_rates; others -> none, use RAG)
 	def select_facts(self, product: str, slots: Dict[str, Any]) -> List[Dict[str, Any]]:
 		when: Optional[date] = None
 		channel = slots.get("channel")
@@ -409,22 +407,8 @@ class Database:
 		try:
 			if product == "Вклад":
 				return self.product_rates_query(payout_type, term_days, amount, when, channel, currency, None)
-			# generic facts (keep for future non-deposit products)
-			q = (
-				self.client.table("product_facts").select("id, doc_id, product_code, channel, currency, fact_key, term_days, amount_min, amount_max, value_numeric, value_text, effective_from, effective_to, source_url")
-				.eq("product_code", product)
-			)
-			if channel:
-				q = q.eq("channel", channel)
-			if currency:
-				q = q.eq("currency", currency)
-			if term_days is not None:
-				q = q.eq("term_days", term_days)
-			if amount is not None:
-				q = q.lte("amount_min", amount)
-				q = q.or_(f"amount_max.is.null,amount_max.gte.{amount}")
-			res = q.execute()
-			return getattr(res, "data", []) or []
+			# No generic facts for other products at the moment
+			return []
 		except Exception:
 			return []
 

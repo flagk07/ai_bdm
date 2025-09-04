@@ -649,30 +649,43 @@ def _build_fact_value(product: str, f: Dict[str, Any]) -> str:
 
 
 def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Optional[str]:
+	# Deposits: apply defaults if missing
+	if product == "Вклад":
+		if not slots.get("currency"):
+			slots["currency"] = "RUB"
+		if not slots.get("channel"):
+			slots["channel"] = "Интернет-Банк"
 	facts = db.select_facts(product, slots)
-	if not facts:
+	if product == "Вклад" and not facts:
 		return None
+	if product != "Вклад":
+		# No FACTS for non-deposits: use RAG docs strictly by product_code, no numbers
+		docs = db.select_rag_docs_by_product(product, limit=5)
+		if not docs:
+			return None
+		titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
+		coach = "- Уточните ключевые условия (срок/сумма/страхование/доход)\n- Один следующий шаг\n- Отработка 1 возражения\n- Предложите смежный продукт"
+		out = ["Ключевые условия (по материалам банка):\n" + "\n".join(titles), "\nЧто сказать клиенту:\n" + coach]
+		return "\n".join(out)
+	# For deposits: build concise top-5 list
 	currencies = {f.get("currency") for f in facts if f.get("currency")}
 	channels = {f.get("channel") for f in facts if f.get("channel")}
 	if len(currencies) > 1 or len(channels) > 1:
 		return "Уточните канал (интернет-банк/офис) и валюту (RUB/USD/EUR/CNY), чтобы показать точные условия."
 	f_lines: List[str] = []
-	f_map: Dict[int, Dict[str, Any]] = {}
-	for i, f in enumerate(facts[:20], start=1):
+	for i, f in enumerate(facts[:5], start=1):
 		label = _build_fact_label(product, f)
 		value = _build_fact_value(product, f)
 		f_lines.append(f"- {label}: {value} [F{i}]")
-		f_map[i] = f
-	# Use RAG docs as supplementary rules context via product_code
-	rules_docs = db.select_rag_docs_by_product(product, limit=6)
+	# Supplemental rules titles from RAG docs
+	rules_docs = db.select_rag_docs_by_product(product, limit=3)
 	s_lines = [f"- {(rd.get('title') or '').strip()} [S{j}]" for j, rd in enumerate(rules_docs, start=1)]
 	coach = "- Сформулируйте выгоду на языке клиента\n- Один следующий шаг\n- Отработка 1 возражения\n- Перевести к смежному продукту"
 	out: List[str] = []
 	out.append("Ставки/условия (точные цифры из FACTS):\n" + "\n".join(f_lines))
 	if s_lines:
-		out.append("\nКлючевые правила (из того же документа):\n" + "\n".join(s_lines))
+		out.append("\nКлючевые правила (по материалам банка):\n" + "\n".join(s_lines))
 	out.append("\nЧто сказать клиенту:\n" + coach)
-	out.append("\nГотов продолжить: могу уточнить срок/сумму/тип выплаты и подобрать конкретный тариф.")
 	return "\n".join(out)
 
 
@@ -760,7 +773,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			ans = sanitize_text_assistant_output(fin)
 			ans = _normalize_bullets(ans)
 			ans = _strip_md_emphasis(ans)
-			ans = validate_numbers(ans, has_facts=True)
+			ans = validate_numbers(ans, has_facts=(product_hint == "Вклад"))
 			# Hide [F#]/[S#] for all except tg id == 195830791
 			if tg_id != 195830791:
 				ans = re.sub(r"\s?\[(?:F|S)\d+\]", "", ans)
@@ -883,6 +896,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	answer_clean = sanitize_text_assistant_output(answer)
 	answer_clean = _normalize_bullets(answer_clean)
 	answer_clean = _strip_md_emphasis(answer_clean)
+	# For non-deposit products (no FACTS), ensure no numbers are leaked
+	if (not auto_summary) and (product_hint != "Вклад"):
+		answer_clean = validate_numbers(answer_clean, has_facts=False)
 
 	# Store
 	db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
