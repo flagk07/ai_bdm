@@ -161,7 +161,9 @@ def _try_reply_deposit_rates(
 	if "мой дом" in lowq or "интернет-банк" in lowq or "интернет банк" in lowq:
 		channel = "Интернет-Банк"
 	# Detect currency from query (₽/$/€/¥), else no filter
-	curr = _detect_currency(user_clean) or o.get("currency")
+	curr = _detect_currency(user_clean) or o.get("currency") or "RUB"
+	if channel is None:
+		channel = "Интернет-Банк"
 	rows = db.product_rates_query(pt, term, amt, when, channel=channel, currency=curr, source_like=None)
 	if not rows:
 		# Fallback loosen filters stepwise
@@ -173,10 +175,8 @@ def _try_reply_deposit_rates(
 		return "Нет данных о ставках по вкладам для указанных параметров, проверьте первоисточник."
 	# If result set is big and user didn't ask to 'show all', ask for clarifications to avoid overly long answer
 	if "показать все" not in lowq:
-		too_many = len(rows) > 30
+		too_many = len(rows) > 10
 		missing_keys = []
-		if curr is None:
-			missing_keys.append("валюта (RUB/USD/EUR/CNY)")
 		if pt is None:
 			missing_keys.append("выплата процентов (ежемесячно/в конце)")
 		if amt is None:
@@ -194,9 +194,9 @@ def _try_reply_deposit_rates(
 			cur_hint = ("; валюты: " + ", ".join(curropts)) if curropts else ""
 			need = "; ".join(missing_keys) if missing_keys else "уточните срок (например, 181 дней)"
 			return (
-				"Чтобы дать корректный и не слишком длинный ответ, уточните: " + need + ".\n"
-				f"Можно ответить одной строкой: ‘ежемесячно, 1 000 000 ₽, 181 дней, RUB’.\nПодсказки{term_hint}{plan_hint}{cur_hint}.\n"
-				"Напишите ‘показать все’, если нужен полный список (может быть длинно)."
+				"Чтобы ответ был максимально точным и коротким, уточните: " + need + ".\n"
+				f"Можно ответить одной строкой: ‘ежемесячно, 1 000 000 ₽, 181 дней, {curr}’.\nПодсказки"+term_hint+plan_hint+cur_hint+".\n"
+				"Напишите ‘показать все’, если нужен полный список."
 			)
 	# Group by payout_type -> term_days -> amount bucket
 	def _fmt_amount(val: Optional[float], curr: Optional[str]) -> str:
@@ -238,7 +238,7 @@ def _try_reply_deposit_rates(
 		r_sorted = sorted(rows, key=lambda r: (int(r.get("term_days", 0)), -(_rate_pct_of(r)), float(r.get("amount_min") or 0)))
 	lines = [header]
 	# Cap the number of listed items to keep the message concise
-	MAX_OUTPUT_LINES = 20
+	MAX_OUTPUT_LINES = 5
 	count = 0
 	for r in r_sorted:
 		term_r = int(r.get("term_days", 0))
