@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+from datetime import date
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher
@@ -13,6 +14,7 @@ from src.db import Database
 from src.handlers import register_handlers
 from src.scheduler import StatsScheduler
 from src.rag import ingest_kn_docs, ingest_deposit_docs
+from src.assistant import get_assistant_reply
 
 app = FastAPI()
 
@@ -418,6 +420,41 @@ async def ingest_deposit_custom(request: Request) -> JSONResponse:
 	except Exception as e:
 		try:
 			db.log(None, "ingest_deposit_custom_exception", {"error": str(e)})
+		except Exception:
+			pass
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/assistant_test")
+async def assistant_test(request: Request) -> JSONResponse:
+	# Protected testing endpoint to ask assistant directly
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	try:
+		payload = await request.json()
+		text = (payload.get("text") or "").strip() if isinstance(payload, dict) else ""
+		tg_id = int(payload.get("tg_id") or 195830791)
+		if not text:
+			return JSONResponse({"ok": False, "error": "missing text"}, status_code=400)
+		# Ensure allowed user and employee exist
+		try:
+			db.client.table("allowed_users").upsert({"tg_id": tg_id, "active": True}, on_conflict="tg_id").execute()
+			db.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").execute()
+		except Exception:
+			pass
+		# Compute stats and call assistant
+		today = date.today()
+		stats = db.stats_day_week_month(tg_id, today)
+		month_rank = db.month_ranking(today.replace(day=1), today)
+		emp = db.get_or_register_employee(tg_id)
+		agent_name = (emp.agent_name if emp else "Тест")
+		answer = get_assistant_reply(db, tg_id, agent_name, stats, month_rank, text)
+		return JSONResponse({"ok": True, "tg_id": tg_id, "question": text, "answer": answer})
+	except Exception as e:
+		try:
+			db.log(None, "assistant_test_error", {"error": str(e)})
 		except Exception:
 			pass
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
