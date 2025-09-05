@@ -767,8 +767,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		docs = db.select_rag_docs_by_product("Вклад", limit=5)
 		titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
 		coach = "- Оформление в Интернет-Банке за 3–5 минут\n- Подчеркните надёжность и гибкие условия\n- Один следующий шаг и предложение смежного продукта"
-		ans = ("Ключевые условия по вкладам (по материалам банка):\n" + ("\n".join(titles) if titles else "—") +
-			"\n\nЧто сказать клиенту:\n" + coach)
+		head = "Ключевые условия по вкладам (по материалам банка):\n" if titles else "Ключевые условия по вкладам:\n"
+		body = "\n".join(titles) if titles else "—"
+		ans = head + body + "\n\nЧто сказать клиенту:\n" + coach
 		ans = sanitize_text_assistant_output(ans)
 		ans = _normalize_bullets(ans)
 		ans = _strip_md_emphasis(ans)
@@ -831,8 +832,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			docs = db.select_rag_docs_by_product("Вклад", limit=5)
 			titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
 			coach = "- Оформление в Интернет-Банке за 3–5 минут\n- Подчеркните надёжность и гибкие условия\n- Один следующий шаг и предложение смежного продукта"
-			ans = ("Ключевые условия по вкладам (по материалам банка):\n" + ("\n".join(titles) if titles else "—") +
-				"\n\nЧто сказать клиенту:\n" + coach)
+			head = "Ключевые условия по вкладам (по материалам банка):\n" if titles else "Ключевые условия по вкладам:\n"
+			body = "\n".join(titles) if titles else "—"
+			ans = head + body + "\n\nЧто сказать клиенту:\n" + coach
 			ans = sanitize_text_assistant_output(ans)
 			ans = _normalize_bullets(ans)
 			ans = _strip_md_emphasis(ans)
