@@ -674,17 +674,41 @@ def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Op
 	channels = {f.get("channel") for f in facts if f.get("channel")}
 	if len(currencies) > 1 or len(channels) > 1:
 		return "Уточните канал (интернет-банк/офис) и валюту (RUB/USD/EUR/CNY), чтобы показать точные условия."
-	f_lines: List[str] = []
-	for i, f in enumerate(facts[:5], start=1):
-		label = _build_fact_label(product, f)
-		value = _build_fact_value(product, f)
-		f_lines.append(f"- {label}: {value} [F{i}]")
+	# If payout_type not provided, show two groups up to 3 each
+	payout = (slots.get("payout_type") or "").lower() if isinstance(slots, dict) else ""
+	section_lines: List[str] = []
+	if not payout:
+		monthly = [f for f in facts if (f.get("payout_type") or "").lower() == "monthly"][:3]
+		at_end = [f for f in facts if (f.get("payout_type") or "").lower() == "end"][:3]
+		if monthly:
+			mlines: List[str] = []
+			for i, f in enumerate(monthly, start=1):
+				label = _build_fact_label(product, f)
+				value = _build_fact_value(product, f)
+				mlines.append(f"- {label}: {value} [F{i}]")
+			section_lines.append("Ежемесячно:\n" + "\n".join(mlines))
+		if at_end:
+			elines: List[str] = []
+			for i, f in enumerate(at_end, start=1):
+				label = _build_fact_label(product, f)
+				value = _build_fact_value(product, f)
+				elines.append(f"- {label}: {value} [F{i}]")
+			section_lines.append("В конце срока:\n" + "\n".join(elines))
+		f_block = "\n\n".join(section_lines) if section_lines else "—"
+	else:
+		# Payout specified → top-3
+		f_lines: List[str] = []
+		for i, f in enumerate(facts[:3], start=1):
+			label = _build_fact_label(product, f)
+			value = _build_fact_value(product, f)
+			f_lines.append(f"- {label}: {value} [F{i}]")
+		f_block = "\n".join(f_lines)
 	# Supplemental rules titles from RAG docs
 	rules_docs = db.select_rag_docs_by_product(product, limit=3)
 	s_lines = [f"- {(rd.get('title') or '').strip()} [S{j}]" for j, rd in enumerate(rules_docs, start=1)]
 	coach = "- Сформулируйте выгоду на языке клиента\n- Один следующий шаг\n- Отработка 1 возражения\n- Перевести к смежному продукту"
 	out: List[str] = []
-	out.append("Ставки/условия (точные цифры из FACTS):\n" + "\n".join(f_lines))
+	out.append("Ставки/условия (точные цифры из FACTS):\n" + f_block)
 	if s_lines:
 		out.append("\nКлючевые правила (по материалам банка):\n" + "\n".join(s_lines))
 	out.append("\nЧто сказать клиенту:\n" + coach)
