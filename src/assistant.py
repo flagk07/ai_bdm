@@ -736,6 +736,22 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=True)
 		db.add_assistant_message(tg_id, "assistant", sanitize_text(redirect), off_topic=False)
 		return redirect
+	# Early non-rate deposit Q: answer from RAG docs immediately (no numbers)
+	if ("вклад" in user_clean.lower() or "депозит" in user_clean.lower()) and not _is_deposit_rates_intent(user_clean):
+		docs = db.select_rag_docs_by_product("Вклад", limit=5)
+		titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
+		coach = "- Оформление в Интернет-Банке за 3–5 минут\n- Подчеркните надёжность и гибкие условия\n- Один следующий шаг и предложение смежного продукта"
+		ans = ("Ключевые условия по вкладам (по материалам банка):\n" + ("\n".join(titles) if titles else "—") +
+			"\n\nЧто сказать клиенту:\n" + coach)
+		ans = sanitize_text_assistant_output(ans)
+		ans = _normalize_bullets(ans)
+		ans = _strip_md_emphasis(ans)
+		ans = validate_numbers(ans, has_facts=False)
+		if tg_id != 195830791:
+			ans = re.sub(r"\s?\[S\d+\]", "", ans)
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+		return ans
 
 	# Period data + plans
 	period_stats = db.stats_period(tg_id, start, end)
