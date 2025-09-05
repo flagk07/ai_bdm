@@ -169,8 +169,10 @@ def _try_reply_deposit_rates(
 		# Fallback loosen filters stepwise
 		if term is not None:
 			rows = db.product_rates_query(pt, None, amt, when, channel=channel, currency=curr, source_like=None)
-		if not rows:
-			rows = db.product_rates_query(pt, None, amt, None)
+		if not rows and amt is not None:
+			rows = db.product_rates_query(pt, term, None, when, channel=channel, currency=curr, source_like=None)
+		if not rows and amt is not None and term is not None:
+			rows = db.product_rates_query(pt, None, None, when, channel=channel, currency=curr, source_like=None)
 	if not rows:
 		return "Нет данных о ставках по вкладам для указанных параметров, проверьте первоисточник."
 	# If result set is big and user didn't ask to 'show all', ask for clarifications to avoid overly long answer
