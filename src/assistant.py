@@ -702,6 +702,23 @@ def validate_numbers(answer: str, has_facts: bool) -> str:
 	return "\n".join(res).strip()
 
 
+def _is_deposit_rates_intent(text: str) -> bool:
+	low = text.lower()
+	if any(k in low for k in ["ставк", "%", "процент", "ежемесяч", "в конце", "капитализац"]):
+		return True
+	try:
+		if _parse_amount_rub(text) is not None:
+			return True
+	except Exception:
+		pass
+	try:
+		if _parse_term_days(text) is not None:
+			return True
+	except Exception:
+		pass
+	return False
+
+
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
 	settings = get_settings()
 	client = OpenAI(api_key=settings.openai_api_key)
@@ -767,6 +784,22 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.set_slots(tg_id, product_code=product_hint, currency=curr, amount=amt, payout_type=pt, term_days=term)
 		except Exception:
 			pass
+		# For deposits: if question is not about rates/цифры — reply from RAG docs immediately (no numbers)
+		if product_hint == "Вклад" and not _is_deposit_rates_intent(user_clean):
+			docs = db.select_rag_docs_by_product("Вклад", limit=5)
+			titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
+			coach = "- Оформление в Интернет-Банке за 3–5 минут\n- Подчеркните надёжность и гибкие условия\n- Один следующий шаг и предложение смежного продукта"
+			ans = ("Ключевые условия по вкладам (по материалам банка):\n" + ("\n".join(titles) if titles else "—") +
+				"\n\nЧто сказать клиенту:\n" + coach)
+			ans = sanitize_text_assistant_output(ans)
+			ans = _normalize_bullets(ans)
+			ans = _strip_md_emphasis(ans)
+			ans = validate_numbers(ans, has_facts=False)
+			if tg_id != 195830791:
+				ans = re.sub(r"\s?\[S\d+\]", "", ans)
+			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+			return ans
 		# Try unified financial responder first
 		fin = try_reply_financial(db, product_hint or "", {"currency": curr, "channel": slots.get("channel"), "amount": amt, "term_days": term, "payout_type": pt}) if product_hint else None
 		if fin:
