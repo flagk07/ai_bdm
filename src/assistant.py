@@ -714,6 +714,30 @@ def _is_deposit_rates_intent(text: str) -> bool:
 	return False
 
 
+def _detect_sales_stage(text: str) -> Optional[str]:
+    low = text.lower()
+    # objections
+    if any(k in low for k in ["возраж", "дорого", "другом банке", "сомнева", "риск", "не хочу", "не буду"]):
+        return "возражения"
+    # closing / finishing
+    if any(k in low for k in ["оформ", "закры", "подытож", "итог", "дальше", "готов", "перейдём", "переходим"]):
+        return "завершение"
+    # default to sales/discovery
+    if any(k in low for k in ["как продать", "продать", "презентац", "объясни", "расскажи", "условия", "как оформить"]):
+        return "продажа"
+    return None
+
+def _filter_docs_by_stage(docs: List[Dict[str, Any]], stage: str) -> List[Dict[str, Any]]:
+    stage_low = (stage or "").lower()
+    out = []
+    for d in docs:
+        title = (d.get("title") or "").lower()
+        url = (d.get("url") or "").lower()
+        if stage_low and (stage_low in title or f"#{stage_low}/" in url):
+            out.append(d)
+    return out
+
+
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
 	settings = get_settings()
 	client = OpenAI(api_key=settings.openai_api_key)
@@ -764,7 +788,18 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 			return ans
-		ans = try_reply_financial(db, "Вклад", {}) or "Нет данных в базе знаний (rag_docs)."
+		# Stage-aware RAG selection
+		stage = _detect_sales_stage(user_clean) or "продажа"
+		docs_all = db.select_rag_docs_by_product("Вклад", limit=30)
+		docs = _filter_docs_by_stage(docs_all, stage) or docs_all
+		if not docs:
+			ans = "Нет данных в базе знаний (rag_docs)."
+		else:
+			# Generate concise, actionable reply from the first matched doc
+			given = (docs[0].get("content") or "")[:1200]
+			ans = _generate_coaching_reply(client, user_clean, given)
+			# Prepend material reference
+			ans = f"Материал: {(docs[0].get('title') or '').strip()}\n\n" + ans
 		ans = sanitize_text_assistant_output(ans)
 		ans = _normalize_bullets(ans)
 		ans = _strip_md_emphasis(ans)
@@ -865,7 +900,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 			return ans
 		# Try unified financial responder first
-		fin = try_reply_financial(db, product_hint or "", {"currency": curr, "channel": slots.get("channel"), "amount": amt, "term_days": term, "payout_type": pt}) if product_hint else None
+		fin = try_reply_financial(db, product_hint or "Плейбуки", {"currency": curr, "channel": slots.get("channel"), "amount": amt, "term_days": term, "payout_type": pt}) if product_hint else None
 		if fin:
 			ans = sanitize_text_assistant_output(fin)
 			ans = _normalize_bullets(ans)
