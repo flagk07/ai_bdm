@@ -184,6 +184,26 @@ alter table rag_docs enable row level security;
 drop policy if exists anon_all_rag_docs on rag_docs;
 create policy anon_all_rag_docs on rag_docs for all using (true) with check (true); 
 
+-- Add sales_stage metadata to rag_docs (idempotent)
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'rag_docs' AND column_name = 'sales_stage'
+	) THEN
+		ALTER TABLE rag_docs ADD COLUMN sales_stage text;
+	END IF;
+END$$;
+
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM pg_indexes WHERE indexname = 'idx_rag_docs_stage'
+	) THEN
+		CREATE INDEX idx_rag_docs_stage ON rag_docs(sales_stage);
+	END IF;
+END$$;
+
 -- RAG chunks and vector RPC removed; using rag_docs only for context
 
 -- Normalized deposit rates (FACTS)
