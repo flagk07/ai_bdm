@@ -662,70 +662,26 @@ def _map_natural_term(text: str) -> Optional[int]:
 
 
 def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Optional[str]:
-	# Deposits: apply defaults if missing
-	if product == "Вклад":
-		if not slots.get("currency"):
-			slots["currency"] = "RUB"
-		if not slots.get("channel"):
-			slots["channel"] = "Интернет-Банк"
-	facts = db.select_facts(product, slots)
-	if product == "Вклад" and not facts:
-		return None
-	if product != "Вклад":
-		# No FACTS for non-deposits: use RAG docs strictly by product_code, no numbers + interactive coach
-		docs = db.select_rag_docs_by_product(product, limit=5)
-		if not docs:
-			return None
-		titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
-		coach = _build_interactive_coach(product)
-		out = ["Ключевые условия (по материалам банка):\n" + "\n".join(titles), "\nЧто сказать клиенту:\n" + coach]
-		return "\n".join(out)
-	# For deposits: build concise top-5 list
-	currencies = {f.get("currency") for f in facts if f.get("currency")}
-	channels = {f.get("channel") for f in facts if f.get("channel")}
-	if len(currencies) > 1 or len(channels) > 1:
-		return "Уточните канал (интернет-банк/офис) и валюту (RUB/USD/EUR/CNY), чтобы показать точные условия."
-	# If payout_type not provided, show two groups up to 3 each
-	payout = (slots.get("payout_type") or "").lower() if isinstance(slots, dict) else ""
-	section_lines: List[str] = []
-	if not payout:
-		monthly = [f for f in facts if (f.get("payout_type") or "").lower() == "monthly"][:3]
-		at_end = [f for f in facts if (f.get("payout_type") or "").lower() == "end"][:3]
-		if monthly:
-			mlines: List[str] = []
-			for i, f in enumerate(monthly, start=1):
-				label = _build_fact_label(product, f)
-				value = _build_fact_value(product, f)
-				mlines.append(f"- {label}: {value} [F{i}]")
-			section_lines.append("Ежемесячно:\n" + "\n".join(mlines))
-		if at_end:
-			elines: List[str] = []
-			for i, f in enumerate(at_end, start=1):
-				label = _build_fact_label(product, f)
-				value = _build_fact_value(product, f)
-				elines.append(f"- {label}: {value} [F{i}]")
-			section_lines.append("В конце срока:\n" + "\n".join(elines))
-		f_block = "\n\n".join(section_lines) if section_lines else "—"
-	else:
-		# Payout specified → top-3
-		f_lines: List[str] = []
-		for i, f in enumerate(facts[:3], start=1):
-			label = _build_fact_label(product, f)
-			value = _build_fact_value(product, f)
-			f_lines.append(f"- {label}: {value} [F{i}]")
-		f_block = "\n".join(f_lines)
-	# Supplemental rules titles from RAG docs
-	rules_docs = db.select_rag_docs_by_product(product, limit=3)
-	s_lines = [f"- {(rd.get('title') or '').strip()} [S{j}]" for j, rd in enumerate(rules_docs, start=1)]
-	coach = "- Сформулируйте выгоду на языке клиента\n- Один следующий шаг\n- Отработка 1 возражения\n- Перевести к смежному продукту"
-	out: List[str] = []
-	out.append("Ставки/условия (точные цифры из FACTS):\n" + f_block)
-	if s_lines:
-		out.append("\nКлючевые правила (по материалам банка):\n" + "\n".join(s_lines))
-	# Append closing prompt for deposits
-	out.append("\nСледующий шаг: открою 2 варианта в Интернет‑Банке (3–5 минут). Готовы?\n1) Да  2) Показать оба  3) Сравнить с НС")
-	out.append("\nЧто сказать клиенту:\n" + coach)
-	return "\n".join(out)
+	# RAG-only: return concatenated content excerpts from rag_docs for the product (or generic bucket)
+	docs = db.select_rag_docs_by_product(product or "Плейбуки", limit=5)
+	if not docs and product != "Плейбуки":
+		docs = db.select_rag_docs_by_product("Плейбуки", limit=5)
+	if not docs:
+		return "Нет данных в базе знаний (rag_docs). Обновите материалы."
+	# Compose simple contextual answer
+	titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
+	extracts = []
+	for d in docs[:3]:
+		cnt = (d.get("content") or "").strip()
+		if not cnt:
+			continue
+		# take first 500 chars as preview
+		extracts.append(cnt[:500].rstrip())
+	parts: List[str] = []
+	parts.append("Материалы (RAG):\n" + "\n".join(titles))
+	if extracts:
+		parts.append("\nКлючевое из материалов:\n" + "\n---\n".join(extracts))
+	return "\n".join(parts)
 
 
 def validate_numbers(answer: str, has_facts: bool) -> str:
@@ -794,9 +750,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 		return ans
 
-	# Early non-rate deposit Q: answer from RAG docs immediately (no numbers)
+	# Always answer from RAG docs (RAG-only mode)
 	if ("вклад" in user_clean.lower() or "депозит" in user_clean.lower()) and not _is_deposit_rates_intent(user_clean):
-		# In-branch phrase handlers to avoid RAG loop
+		# In-branch phrase handlers to keep interactivity
 		low2 = user_clean.lower()
 		if re.search(r"что\s+значит\s+(один\s+)?следующ(ий|его)\s+шаг", low2):
 			ans = "Это короткое действие: выбрать тариф в Интернет‑Банке, подтвердить сумму/срок и открыть вклад. Займёт 3–5 минут. Готовы? 1) Да  2) Показать оба  3) Сравнить с НС"
@@ -808,29 +764,10 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 			return ans
-		# If user asked generic "какие условия" -> go straight to FACTS with defaults
-		if re.search(r"\b(какие|так какие)\s+условия\b", user_clean.lower()):
-			# Build facts with defaults quickly
-			slots = {"currency": "RUB", "channel": "Интернет-Банк"}
-			ans = try_reply_financial(db, "Вклад", slots) or "Нет данных, проверьте первоисточник."
-			ans = sanitize_text_assistant_output(ans)
-			ans = _normalize_bullets(ans)
-			ans = _strip_md_emphasis(ans)
-			ans = validate_numbers(ans, has_facts=True)
-			if tg_id != 195830791:
-				ans = re.sub(r"\s?\[(?:F|S)\d+\]", "", ans)
-			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
-			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
-			return ans
-		docs = db.select_rag_docs_by_product("Вклад", limit=5)
-		titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
-		coach = _build_interactive_coach("Вклад")
-		ans = ("Ключевые условия по вкладам (по материалам банка):\n" + ("\n".join(titles) if titles else "—") +
-			"\n\nЧто сказать клиенту:\n" + coach)
+		ans = try_reply_financial(db, "Вклад", {}) or "Нет данных в базе знаний (rag_docs)."
 		ans = sanitize_text_assistant_output(ans)
 		ans = _normalize_bullets(ans)
 		ans = _strip_md_emphasis(ans)
-		ans = validate_numbers(ans, has_facts=False)
 		if tg_id != 195830791:
 			ans = re.sub(r"\s?\[S\d+\]", "", ans)
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)

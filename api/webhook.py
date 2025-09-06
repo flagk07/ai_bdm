@@ -433,6 +433,44 @@ async def assistant_test(request: Request) -> JSONResponse:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.post("/api/rag_reset_single")
+async def rag_reset_single(request: Request) -> JSONResponse:
+	# Token protection
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	try:
+		payload = await request.json()
+		bucket = payload.get("bucket")
+		path = payload.get("path")
+		product_code = payload.get("product_code") or "Плейбуки"
+		if not bucket or not path:
+			return JSONResponse({"ok": False, "error": "expected {\"bucket\":..., \"path\":...}"}, status_code=400)
+		def _do() -> dict:
+			import src.rag as rag_mod
+			# wipe rag_docs
+			try:
+				db.client.table("rag_docs").delete().neq("id", 0).execute()
+			except Exception:
+				pass
+			# fetch text from storage and insert single row
+			mime, title, text = rag_mod._fetch_text_from_url(f"supabase://{bucket}/{path}")
+			row = {
+				"url": f"supabase://{bucket}/{path}",
+				"title": title or path,
+				"product_code": product_code,
+				"mime": mime or "text/plain",
+				"content": text or "",
+			}
+			ins = db.client.table("rag_docs").insert(row).execute()
+			return {"inserted": 1, "product_code": product_code}
+		res = await asyncio.to_thread(_do)
+		return JSONResponse({"ok": True, **res})
+	except Exception as e:
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request) -> JSONResponse:
 	payload = await request.json()
