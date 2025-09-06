@@ -661,12 +661,12 @@ def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Op
 	if product == "Вклад" and not facts:
 		return None
 	if product != "Вклад":
-		# No FACTS for non-deposits: use RAG docs strictly by product_code, no numbers
+		# No FACTS for non-deposits: use RAG docs strictly by product_code, no numbers + interactive coach
 		docs = db.select_rag_docs_by_product(product, limit=5)
 		if not docs:
 			return None
 		titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
-		coach = "- Уточните ключевые условия (срок/сумма/страхование/доход)\n- Один следующий шаг\n- Отработка 1 возражения\n- Предложите смежный продукт"
+		coach = _build_interactive_coach(product)
 		out = ["Ключевые условия (по материалам банка):\n" + "\n".join(titles), "\nЧто сказать клиенту:\n" + coach]
 		return "\n".join(out)
 	# For deposits: build concise top-5 list
@@ -766,10 +766,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	if ("вклад" in user_clean.lower() or "депозит" in user_clean.lower()) and not _is_deposit_rates_intent(user_clean):
 		docs = db.select_rag_docs_by_product("Вклад", limit=5)
 		titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
-		coach = "- Оформление в Интернет-Банке за 3–5 минут\n- Подчеркните надёжность и гибкие условия\n- Один следующий шаг и предложение смежного продукта"
-		head = "Ключевые условия по вкладам (по материалам банка):\n" if titles else "Ключевые условия по вкладам:\n"
-		body = "\n".join(titles) if titles else "—"
-		ans = head + body + "\n\nЧто сказать клиенту:\n" + coach
+		coach = _build_interactive_coach("Вклад")
+		ans = ("Ключевые условия по вкладам (по материалам банка):\n" + ("\n".join(titles) if titles else "—") +
+			"\n\nЧто сказать клиенту:\n" + coach)
 		ans = sanitize_text_assistant_output(ans)
 		ans = _normalize_bullets(ans)
 		ans = _strip_md_emphasis(ans)
@@ -831,10 +830,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		if product_hint == "Вклад" and not _is_deposit_rates_intent(user_clean):
 			docs = db.select_rag_docs_by_product("Вклад", limit=5)
 			titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
-			coach = "- Оформление в Интернет-Банке за 3–5 минут\n- Подчеркните надёжность и гибкие условия\n- Один следующий шаг и предложение смежного продукта"
-			head = "Ключевые условия по вкладам (по материалам банка):\n" if titles else "Ключевые условия по вкладам:\n"
-			body = "\n".join(titles) if titles else "—"
-			ans = head + body + "\n\nЧто сказать клиенту:\n" + coach
+			coach = _build_interactive_coach("Вклад")
+			ans = ("Ключевые условия по вкладам (по материалам банка):\n" + ("\n".join(titles) if titles else "—") +
+				"\n\nЧто сказать клиенту:\n" + coach)
 			ans = sanitize_text_assistant_output(ans)
 			ans = _normalize_bullets(ans)
 			ans = _strip_md_emphasis(ans)
@@ -1008,3 +1006,37 @@ def _to_numbered(text: str) -> str:
 			out.append(f"{idx}) {clean}")
 		idx += 1
 	return "\n".join(out) 
+
+
+def _build_interactive_coach(product: str) -> str:
+    """Return 4-step mini-script + a follow-up question with quick options.
+    Kept generic, lightly tailored by product.
+    """
+    prod = (product or "").strip() or "продукту"
+    # Steps: probe → value → proof → close, then question with options
+    lines: List[str] = []
+    if prod == "Вклад":
+        lines.append("- Уточнение: какой срок/тип выплаты важен — ежемесячно или в конце?")
+        lines.append("- Ценность: можно зафиксировать доход, проценты по графику — удобно видеть результат.")
+        lines.append("- Доверие: оформляется онлайн за 3–5 минут, вклад застрахован АСВ.")
+        lines.append("- Закрытие: предложите 1–2 тарифа на выбор, под цель клиента.")
+        q = "Подскажите, как удобнее: 1) ежемесячно 2) в конце 3) посмотреть оба варианта?"
+    elif prod == "КН":
+        lines.append("- Уточнение: сумма/срок/страховка — что принципиально?")
+        lines.append("- Ценность: под вашу задачу предложим прозрачный платёж и быстрый выпуск.")
+        lines.append("- Доверие: решение онлайн, без лишних визитов; документы — в приложении.")
+        lines.append("- Закрытие: 1–2 предложения на выбор и следующий шаг.")
+        q = "Сориентируйте, пожалуйста: 1) сумма 2) срок 3) без страховки 4) всё равно — подобрать?"
+    elif prod == "КК":
+        lines.append("- Уточнение: что важнее — льготный период, кэшбэк или лимит?")
+        lines.append("- Ценность: под привычные траты — максимальный кэшбэк/льгота, выпуск быстро.")
+        lines.append("- Доверие: оформление онлайн за несколько минут, напоминания — в приложении.")
+        lines.append("- Закрытие: 1–2 варианта и оформление сейчас.")
+        q = "Выберите ориентацию: 1) кэшбэк 2) льготный период 3) лимит 4) подобрать автоматически?"
+    else:
+        lines.append("- Уточнение: что важнее в продукте — простота, доход/экономия или гибкость?")
+        lines.append("- Ценность: предложим 1–2 варианта под вашу цель, без перегруза деталями.")
+        lines.append("- Доверие: оформление онлайн, поддержка — в мессенджере/приложении.")
+        lines.append("- Закрытие: согласуем следующий шаг в 1 клик.")
+        q = "Что выбираем: 1) простота 2) доход/экономия 3) гибкость 4) показать оба варианта?"
+    return "\n".join(lines) + "\n" + q 
