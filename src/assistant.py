@@ -863,6 +863,19 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			pass
 		# For deposits: if question is not about rates/цифры — reply from RAG docs immediately (no numbers)
 		if product_hint == "Вклад" and not _is_deposit_rates_intent(user_clean):
+			# Fast-path: "какие условия" -> go to FACTS with defaults instead of repeating RAG
+			if re.search(r"\b(какие|так какие)\s+условия\b", user_clean.lower()):
+				def_slots = {"currency": "RUB", "channel": "Интернет-Банк"}
+				ans = try_reply_financial(db, "Вклад", def_slots) or "Нет данных, проверьте первоисточник."
+				ans = sanitize_text_assistant_output(ans)
+				ans = _normalize_bullets(ans)
+				ans = _strip_md_emphasis(ans)
+				ans = validate_numbers(ans, has_facts=True)
+				if tg_id != 195830791:
+					ans = re.sub(r"\s?\[(?:F|S)\d+\]", "", ans)
+				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+				db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+				return ans
 			docs = db.select_rag_docs_by_product("Вклад", limit=5)
 			titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
 			coach = _build_interactive_coach("Вклад")
