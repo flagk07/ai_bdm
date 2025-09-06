@@ -197,8 +197,8 @@ def _try_reply_deposit_rates(
 			need = "; ".join(missing_keys) if missing_keys else "уточните срок (например, 181 дней)"
 			return (
 				"Чтобы ответ был максимально точным и коротким, уточните: " + need + ".\n"
-				f"Можно ответить одной строкой: ‘ежемесячно, 1 000 000 ₽, 181 дней, {curr}’.\nПодсказки"+term_hint+plan_hint+cur_hint+".\n"
-				"Напишите ‘показать все’, если нужен полный список."
+				f"Можно ответить одной строкой: 'ежемесячно, 1 000 000 ₽, 181 дней, {curr}'.\nПодсказки"+term_hint+plan_hint+cur_hint+".\n"
+				"Напишите 'показать все', если нужен полный список."
 			)
 	# Group by payout_type -> term_days -> amount bucket
 	def _fmt_amount(val: Optional[float], curr: Optional[str]) -> str:
@@ -271,7 +271,7 @@ def _try_reply_deposit_rates(
 	if prefs_local.get("rate") == "high":
 		coach_lines.append("Если важна ставка — предложите из рекомендуемых выше; кратко обрисуйте выгоду.")
 	if prefs_local.get("thinking"):
-		coach_lines.append("Фраза: ‘Понимаю, можно зафиксировать условия сегодня, а решение принять после обсуждения — удобнее клиенту’.")
+		coach_lines.append("Фраза: 'Понимаю, можно зафиксировать условия сегодня, а решение принять после обсуждения — удобнее клиенту'.")
 	coach = ("\nЧто сказать клиенту:\n" + "\n".join(["- " + s for s in coach_lines])) if coach_lines else ""
 	# Actions single line
 	actions = "\nДействия сотрудника: выберите наиболее подходящий тариф из списка и помогите открыть вклад клиенту"
@@ -309,7 +309,7 @@ def _generate_coaching_reply(client: OpenAI, user_text: str, given_text: str) ->
 def _build_system_prompt(agent_name: str, stats_line: str, group_line: str, notes_preview: str) -> str:
 	system = (
 		"Ты — AI BDM-коуч для выездных сотрудников банка. Разрешено только: продукты [КН, КК, ДК, КСП, ИК, ИЗП, НС, Вклад, КН к ЗП], кросс-продажи, личные результаты/планы/рейтинг, коучинг, улучшение качества встречи. Вне тематики — мягко верни к рабочим вопросам. ПДн не запрашивай и не используй.\n\n"
-		"Приоритет: 1) FACTS (БД: точные цифры — ставки/лимиты/комиссии/сроки/суммы) → 2) SOURCES (RAG: правила/исключения). Любая цифра сопровождается [F#], правила — [S#]. Если данных нет — ‘нет данных, проверьте первоисточник’.\n\n"
+		"Приоритет: 1) FACTS (БД: точные цифры — ставки/лимиты/комиссии/сроки/суммы) → 2) SOURCES (RAG: правила/исключения). Любая цифра сопровождается [F#], правила — [S#]. Если данных нет — 'нет данных, проверьте первоисточник'.\n\n"
 		"Допусти 1 уточняющий вопрос ТОЛЬКО если без него нельзя дать корректный ответ (например, не указаны валюта/канал/срок/сумма/тип выплаты).\n\n"
 		"Стиль: кратко, делово, без воды, без жирного и эмодзи.\n\n"
 		"Формат:\n1) Сводка (1–2 строки)\n2) Цифры FACTS (по одному в строке, с [F#])\n3) Ключевые условия (из того же документа, с [S#])\n4) Рекомендации по продаже (3–5 пунктов, без чисел)\n5) Следующий шаг/уточнение (1 вопрос максимум)\n"
@@ -774,6 +774,8 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# Detect internal auto-summary prompts early to adjust flow
 	auto_summary = "[auto_summary]" in user_clean.lower()
 	today = date.today()
+	# Restore period parsing for stats usage below
+	start, end, period_label = _parse_period(user_clean, today)
 
 	# Phrase handlers with high precedence
 	low = user_clean.lower()
@@ -782,7 +784,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 		return ans
-	if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ", low):
+	if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ|откр(ой|ыть|ываю)\s+вклад", low):
 		ans = "Отлично, оформим в Интернет‑Банке. Проверьте: паспорт под рукой, доступ в ИБ. Открою 2 варианта на выбор — какой предпочтёте? 1) Ежемесячно  2) В конце  3) Показать оба"
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
@@ -797,7 +799,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 			return ans
-		if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ", low2):
+		if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ|откр(ой|ыть|ываю)\s+вклад", low2):
 			ans = "Отлично, оформим в Интернет‑Банке. Проверьте: паспорт под рукой, доступ в ИБ. Открою 2 варианта на выбор — какой предпочтёте? 1) Ежемесячно  2) В конце  3) Показать оба"
 			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
@@ -887,7 +889,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 				db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 				return ans
-			if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ", low3):
+			if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ|откр(ой|ыть|ываю)\s+вклад", low3):
 				ans = "Отлично, оформим в Интернет‑Банке. Проверьте: паспорт под рукой, доступ в ИБ. Открою 2 варианта на выбор — какой предпочтёте? 1) Ежемесячно  2) В конце  3) Показать оба"
 				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 				db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
