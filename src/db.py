@@ -413,17 +413,20 @@ class Database:
 			return []
 
 	# New: simple RAG docs fetch by product_code (no rag_chunks usage)
-	def select_rag_docs_by_product(self, product_code: str, limit: int = 6) -> List[Dict[str, Any]]:
+	def select_rag_docs_by_product(self, product_code: str, limit: int = 6, sales_stage: Optional[str] = None) -> List[Dict[str, Any]]:
 		try:
-			res = (
+			q = (
 				self.client
 				.table("rag_docs")
-				.select("id, url, title, content, product_code")
+				.select("id, url, title, content, product_code, sales_stage")
 				.eq("product_code", product_code)
-				.order("fetched_at", desc=True)
-				.limit(limit)
-				.execute()
 			)
+			if sales_stage:
+				try:
+					q = q.eq("sales_stage", sales_stage)
+				except Exception:
+					pass
+			res = q.order("fetched_at", desc=True).limit(limit).execute()
 			return getattr(res, "data", []) or []
 		except Exception:
 			return []

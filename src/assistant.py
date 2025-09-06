@@ -790,8 +790,10 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			return ans
 		# Stage-aware RAG selection
 		stage = _detect_sales_stage(user_clean) or "продажа"
-		docs_all = db.select_rag_docs_by_product("Вклад", limit=30)
-		docs = _filter_docs_by_stage(docs_all, stage) or docs_all
+		docs = db.select_rag_docs_by_product("Вклад", limit=30, sales_stage=stage)
+		if not docs:
+			# fallback: stage-agnostic for same product
+			docs = db.select_rag_docs_by_product("Вклад", limit=30)
 		if not docs:
 			ans = "Нет данных в базе знаний (rag_docs)."
 		else:
