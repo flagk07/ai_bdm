@@ -837,22 +837,24 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 		return ans
 
-	# Period data + plans
-	period_stats = db.stats_period(tg_id, start, end)
-	plan_info = db.compute_plan_breakdown(tg_id, today)
-	# previous period for comparison
-	prev_start = start - (end - start) - timedelta(days=1)
-	prev_end = start - timedelta(days=1)
-	prev_stats = db.stats_period(tg_id, prev_start, prev_end)
-	group_rank = db.group_ranking_period(start, end)
-
-	# Direct stats reply
+	# Period data only for explicit stats requests to avoid unnecessary deps
 	if _is_stats_request(user_clean):
+		period_stats = db.stats_period(tg_id, start, end)
+		plan_info = db.compute_plan_breakdown(tg_id, today)
+		# previous period for comparison
+		prev_start = start - (end - start) - timedelta(days=1)
+		prev_end = start - timedelta(days=1)
+		prev_stats = db.stats_period(tg_id, prev_start, prev_end)
+		group_rank = db.group_ranking_period(start, end)
 		reply = _format_stats_reply(period_label, int(period_stats.get("total", 0)), period_stats.get("by_product", {}), group_rank)
-		reply_clean = sanitize_text(reply) if False else sanitize_text(reply)
+		reply_clean = sanitize_text(reply)
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 		db.add_assistant_message(tg_id, "assistant", reply_clean, off_topic=False)
 		return reply_clean
+	# Defaults when not a stats request
+	period_stats = {"total": 0, "by_product": {}}
+	plan_info = {"plan_day": 0, "plan_week": 0, "plan_month": 0, "rr_month": 0}
+	group_rank = []
 
 	# Merge slots and deterministic branches only for normal chats (not auto-summary)
 	if not auto_summary:
