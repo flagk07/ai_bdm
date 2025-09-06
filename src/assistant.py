@@ -790,6 +790,18 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 
 	# Early non-rate deposit Q: answer from RAG docs immediately (no numbers)
 	if ("вклад" in user_clean.lower() or "депозит" in user_clean.lower()) and not _is_deposit_rates_intent(user_clean):
+		# In-branch phrase handlers to avoid RAG loop
+		low2 = user_clean.lower()
+		if re.search(r"что\s+значит\s+(один\s+)?следующ(ий|его)\s+шаг", low2):
+			ans = "Это короткое действие: выбрать тариф в Интернет‑Банке, подтвердить сумму/срок и открыть вклад. Займёт 3–5 минут. Готовы? 1) Да  2) Показать оба  3) Сравнить с НС"
+			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+			return ans
+		if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ", low2):
+			ans = "Отлично, оформим в Интернет‑Банке. Проверьте: паспорт под рукой, доступ в ИБ. Открою 2 варианта на выбор — какой предпочтёте? 1) Ежемесячно  2) В конце  3) Показать оба"
+			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+			return ans
 		# If user asked generic "какие условия" -> go straight to FACTS with defaults
 		if re.search(r"\b(какие|так какие)\s+условия\b", user_clean.lower()):
 			# Build facts with defaults quickly
@@ -868,6 +880,18 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			pass
 		# For deposits: if question is not about rates/цифры — reply from RAG docs immediately (no numbers)
 		if product_hint == "Вклад" and not _is_deposit_rates_intent(user_clean):
+			# In-branch phrase handlers to avoid RAG loop
+			low3 = user_clean.lower()
+			if re.search(r"что\s+значит\s+(один\s+)?следующ(ий|его)\s+шаг", low3):
+				ans = "Это короткое действие: выбрать тариф в Интернет‑Банке, подтвердить сумму/срок и открыть вклад. Займёт 3–5 минут. Готовы? 1) Да  2) Показать оба  3) Сравнить с НС"
+				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+				db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+				return ans
+			if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ", low3):
+				ans = "Отлично, оформим в Интернет‑Банке. Проверьте: паспорт под рукой, доступ в ИБ. Открою 2 варианта на выбор — какой предпочтёте? 1) Ежемесячно  2) В конце  3) Показать оба"
+				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+				db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+				return ans
 			# Fast-path: "какие условия" -> go to FACTS with defaults instead of repeating RAG
 			if re.search(r"\b(какие|так какие)\s+условия\b", user_clean.lower()):
 				def_slots = {"currency": "RUB", "channel": "Интернет-Банк"}
