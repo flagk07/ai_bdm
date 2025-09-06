@@ -650,6 +650,17 @@ def _build_fact_value(product: str, f: Dict[str, Any]) -> str:
 	return (f.get("value_text") or "").strip()
 
 
+def _map_natural_term(text: str) -> Optional[int]:
+    low = text.lower()
+    if any(k in low for k in ["год", "12 мес", "12 месяцев", "на год"]):
+        return 367
+    if any(k in low for k in ["полгода", "6 мес", "6 месяцев", "на пол года", "на полгода"]):
+        return 181
+    if any(k in low for k in ["квартал", "3 мес", "3 месяца"]):
+        return 91
+    return None
+
+
 def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Optional[str]:
 	# Deposits: apply defaults if missing
 	if product == "Вклад":
@@ -711,6 +722,8 @@ def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Op
 	out.append("Ставки/условия (точные цифры из FACTS):\n" + f_block)
 	if s_lines:
 		out.append("\nКлючевые правила (по материалам банка):\n" + "\n".join(s_lines))
+	# Append closing prompt for deposits
+	out.append("\nСледующий шаг: открою 2 варианта в Интернет‑Банке (3–5 минут). Готовы?\n1) Да  2) Показать оба  3) Сравнить с НС")
 	out.append("\nЧто сказать клиенту:\n" + coach)
 	return "\n".join(out)
 
@@ -750,6 +763,14 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	client = OpenAI(api_key=settings.openai_api_key)
 
 	user_clean = sanitize_text_assistant_output(user_message)
+	# Natural term mapping into slots (best-effort)
+	try:
+		mapped = _map_natural_term(user_clean)
+		if mapped:
+			prev = db.get_slots(tg_id)
+			db.set_slots(tg_id, term_days=mapped, product_code=prev.get("product_code") or "Вклад")
+	except Exception:
+		pass
 	# Detect internal auto-summary prompts early to adjust flow
 	auto_summary = "[auto_summary]" in user_clean.lower()
 	today = date.today()
@@ -764,6 +785,20 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		return redirect
 	# Early non-rate deposit Q: answer from RAG docs immediately (no numbers)
 	if ("вклад" in user_clean.lower() or "депозит" in user_clean.lower()) and not _is_deposit_rates_intent(user_clean):
+		# If user asked generic "какие условия" -> go straight to FACTS with defaults
+		if re.search(r"\b(какие|так какие)\s+условия\b", user_clean.lower()):
+			# Build facts with defaults quickly
+			slots = {"currency": "RUB", "channel": "Интернет-Банк"}
+			ans = try_reply_financial(db, "Вклад", slots) or "Нет данных, проверьте первоисточник."
+			ans = sanitize_text_assistant_output(ans)
+			ans = _normalize_bullets(ans)
+			ans = _strip_md_emphasis(ans)
+			ans = validate_numbers(ans, has_facts=True)
+			if tg_id != 195830791:
+				ans = re.sub(r"\s?\[(?:F|S)\d+\]", "", ans)
+			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+			return ans
 		docs = db.select_rag_docs_by_product("Вклад", limit=5)
 		titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
 		coach = _build_interactive_coach("Вклад")
