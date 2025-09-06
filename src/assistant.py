@@ -774,8 +774,12 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# Detect internal auto-summary prompts early to adjust flow
 	auto_summary = "[auto_summary]" in user_clean.lower()
 	today = date.today()
-	# Restore period parsing for stats usage below
-	start, end, period_label = _parse_period(user_clean, today)
+	# Ensure period vars are always defined
+	start, end, period_label = today, today, "сегодня"
+	try:
+		start, end, period_label = _parse_period(user_clean, today)
+	except Exception:
+		pass
 
 	# Phrase handlers with high precedence
 	low = user_clean.lower()
