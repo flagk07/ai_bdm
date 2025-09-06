@@ -774,15 +774,20 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# Detect internal auto-summary prompts early to adjust flow
 	auto_summary = "[auto_summary]" in user_clean.lower()
 	today = date.today()
-	start, end, period_label = _parse_period(user_clean, today)
 
-	# Early off-topic block
-	off_topic = _is_off_topic(user_clean)
-	if off_topic:
-		redirect = _redirect_reply()
-		db.add_assistant_message(tg_id, "user", user_clean, off_topic=True)
-		db.add_assistant_message(tg_id, "assistant", sanitize_text(redirect), off_topic=False)
-		return redirect
+	# Phrase handlers with high precedence
+	low = user_clean.lower()
+	if re.search(r"что\s+значит\s+(один\s+)?следующ(ий|его)\s+шаг", low):
+		ans = "Это короткое действие: выбрать тариф в Интернет‑Банке, подтвердить сумму/срок и открыть вклад. Займёт 3–5 минут. Готовы? 1) Да  2) Показать оба  3) Сравнить с НС"
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+		return ans
+	if re.search(r"оформля(ем|ть)\s+онлайн|готов(а|)\s+оформ", low):
+		ans = "Отлично, оформим в Интернет‑Банке. Проверьте: паспорт под рукой, доступ в ИБ. Открою 2 варианта на выбор — какой предпочтёте? 1) Ежемесячно  2) В конце  3) Показать оба"
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
+		return ans
+
 	# Early non-rate deposit Q: answer from RAG docs immediately (no numbers)
 	if ("вклад" in user_clean.lower() or "депозит" in user_clean.lower()) and not _is_deposit_rates_intent(user_clean):
 		# If user asked generic "какие условия" -> go straight to FACTS with defaults
