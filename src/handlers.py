@@ -126,18 +126,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.message(Command("result"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "внести кросс")
 	async def enter_results(message: Message, state: FSMContext) -> None:
-		user_id = message.from_user.id
-		# Access already проверен ранее в /meet; здесь не дублируем, но для прямого вызова оставим мягкую проверку
-		if not db.is_allowed(user_id):
-			await message.answer("Доступ ограничен.")
-			return
-		emp = db.get_or_register_employee(user_id)
-		if not emp:
-			await message.answer("Временная ошибка базы. Повторите позже.", reply_markup=main_keyboard())
-			return
-		await state.set_state(ResultStates.selecting)
-		await state.update_data(session=ResultSession(selected=set()).__dict__)
-		await message.answer("Отметьте продукты (чек-боксы)", reply_markup=results_keyboard(set()))
+		await message.answer("Функция временно недоступна", reply_markup=main_keyboard())
 
 	@dp.callback_query(ResultStates.selecting, F.data.startswith("toggle:"))
 	async def toggle_product(call: CallbackQuery, state: FSMContext) -> None:
@@ -215,13 +204,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.message(Command("meet"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "внести встречу")
 	async def meet_start(message: Message, state: FSMContext) -> None:
-		user_id = message.from_user.id
-		if not db.is_allowed(user_id):
-			await message.answer("Доступ ограничен.")
-			return
-		await state.set_state(MeetStates.selecting)
-		await state.update_data(meet=MeetSession(product=None).__dict__)
-		await message.answer("Выберите продукт доставки (один на сессию)", reply_markup=meet_keyboard(None))
+		await message.answer("Функция временно недоступна", reply_markup=main_keyboard())
 
 	@dp.callback_query(MeetStates.selecting, F.data.startswith("meet:"))
 	async def meet_pick(call: CallbackQuery, state: FSMContext) -> None:
@@ -309,75 +292,14 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.message(Command("stats"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "статистика")
 	async def stats_handler(message: Message) -> None:
-		user_id = message.from_user.id
-		if not db.is_allowed(user_id):
-			await message.answer("Доступ ограничен.")
-			return
-		emp = db.get_or_register_employee(user_id)
-		if not emp:
-			await message.answer("Временная ошибка базы. Повторите позже.")
-			return
-		today = date.today()
-		stats = db.stats_day_week_month(user_id, today)
-		plan = db.compute_plan_breakdown(user_id, today)
-		month_rank = db.month_ranking(today.replace(day=1), today)
-		pos = next((i+1 for i, r in enumerate(month_rank) if r["tg_id"] == user_id), None)
-		top2, bottom2 = db.day_top_bottom(today)
-		top_str = ", ".join([r["agent_name"] for r in top2]) if top2 else "—"
-		bottom_str = ", ".join([r["agent_name"] for r in bottom2]) if bottom2 else "—"
-		# facts (cross-sales attempts)
-		day_total = int(stats['today']['total'])
-		week_total = int(stats['week']['total'])
-		month_total = int(stats['month']['total'])
-		# plans
-		p_day = int(plan['plan_day'])
-		p_week = int(plan['plan_week'])
-		p_month = int(plan['plan_month'])
-		# percents
-		perc_day = int(round(day_total * 100 / p_day)) if p_day > 0 else 0
-		perc_week = int(round(week_total * 100 / p_week)) if p_week > 0 else 0
-		perc_month = int(round(month_total * 100 / p_month)) if p_month > 0 else 0
-		rr = int(plan['rr_month'])
-		rr_pct = int(round(rr * 100 / p_month)) if p_month > 0 else 0
-		# meetings and penetration (linked attempts / meetings)
-		start_day, end_day = today, today
-		start_week = today - timedelta(days=today.weekday())
-		start_month = today.replace(day=1)
-		m_day = db.meets_period_count(user_id, start_day, end_day)
-		m_week = db.meets_period_count(user_id, start_week, today)
-		m_month = db.meets_period_count(user_id, start_month, today)
-		linked_day = db.attempts_linked_period_count(user_id, start_day, end_day)
-		linked_week = db.attempts_linked_period_count(user_id, start_week, today)
-		linked_month = db.attempts_linked_period_count(user_id, start_month, today)
-		pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
-		pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
-		pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
-		lines = []
-		lines.append(f"🏆 Агент: {emp.agent_name} — место за месяц: {pos if pos else '—'}")
-		lines.append("1. Сегодня:")
-		lines.append(f"- кросс продажи: {day_total} факт / {p_day} план / {perc_day}% выполнение ")
-		lines.append(f"- встречи: {m_day} проведено / {_fmt1(pen_day)}% проникновение кросс-продаж")
-		lines.append("2. Неделя:")
-		lines.append(f"- кросс продажи: {week_total} факт / {p_week} план / {perc_week}% выполнение ")
-		lines.append(f"- встречи: {m_week} проведено / {_fmt1(pen_week)}% проникновение кросс-продаж")
-		lines.append("3. Месяц:")
-		lines.append(f"- кросс продажи: {month_total} факт / {p_month} план / {perc_month}% выполнение ")
-		lines.append(f"- встречи: {m_month} проведено / {_fmt1(pen_month)}% проникновение кросс-продаж")
-		lines.append(f"4. RR месяца по кросс-продажам: {rr} прогноз факта / {rr_pct}% прогноз выполнения 📈")
-		lines.append(f"🥇 Топ-2 сегодня: {top_str}")
-		lines.append(f"🧱 Антилидеры: {bottom_str}")
-		await message.answer("\n".join(lines), reply_markup=main_keyboard())
+		await message.answer("Функция временно недоступна", reply_markup=main_keyboard())
 
 	# Notes and Assistant handlers below remain unchanged
 	@dp.message(F.text == "Заметки")
 	@dp.message(Command("notes"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "заметки")
 	async def notes_menu(message: Message) -> None:
-		kb = InlineKeyboardMarkup(inline_keyboard=[
-			[InlineKeyboardButton(text="Внести комментарий", callback_data="note:add")],
-			[InlineKeyboardButton(text="Мои комментарии", callback_data="note:list")],
-		])
-		await message.answer("Заметки:", reply_markup=kb)
+		await message.answer("Функция временно недоступна", reply_markup=main_keyboard())
 
 	@dp.callback_query(F.data == "note:add")
 	async def note_add_start(call: CallbackQuery, state: FSMContext) -> None:
@@ -451,7 +373,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 				db.log(message.from_user.id, "assistant_error", {"error": str(e)})
 			except Exception:
 				pass
-			await message.answer("Техническая пауза. Повторите запрос одним сообщением, например: ‘ежемесячно, 1 000 000 ₽, 181 дней’.", reply_markup=main_keyboard())
+			await message.answer("Техническая пауза. Повторите запрос одним сообщением.", reply_markup=main_keyboard())
 
 	# FINAL CATCH-ALL: forward any unmatched text into assistant mode
 	@dp.message()
