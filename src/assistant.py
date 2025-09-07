@@ -852,7 +852,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			return ans
 		stage = dc_detect_sales_stage(user_clean) or "продажа"
 		product = _detect_product(user_clean) or "Вклад"
-		q = user_clean
+		q = f"{user_clean} {product}"
 		rows = db.search_playbook(q, product="Плейбук", limit=30)
 		rows = _filter_rows_by_product_stage(rows, product, stage)
 		rows = _strict_filter_rows_by_product(rows, product)
@@ -942,7 +942,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 				return ans
 			stage = dc_detect_sales_stage(user_clean) or "продажа"
 			product = _detect_product(user_clean) or "Вклад"
-			q = user_clean
+			q = f"{user_clean} {product}"
 			rows = db.search_playbook(q, product="Плейбук", limit=30)
 			rows = _filter_rows_by_product_stage(rows, product, stage)
 			rows = _strict_filter_rows_by_product(rows, product)
@@ -959,7 +959,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		# Try unified financial responder first
 		stage = dc_detect_sales_stage(user_clean) or None
 		product = _detect_product(user_clean) or product_hint or None
-		q = user_clean
+		q = f"{user_clean} {product or ''}".strip()
 		fin = try_reply_financial(db, product_hint or "Плейбук", {"query": q}) if product_hint else None
 		if fin:
 			ans = sanitize_text_assistant_output(fin)
