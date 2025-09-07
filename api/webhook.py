@@ -13,7 +13,7 @@ from src.config import get_settings
 from src.db import Database
 from src.handlers import register_handlers
 from src.scheduler import StatsScheduler
-from src.rag import ingest_kn_docs, ingest_deposit_docs
+# from src.rag import ingest_kn_docs, ingest_deposit_docs  # removed
 from src.assistant import get_assistant_reply
 
 app = FastAPI()
