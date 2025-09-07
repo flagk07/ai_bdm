@@ -661,11 +661,30 @@ def _map_natural_term(text: str) -> Optional[int]:
     return None
 
 
-def _synthesize_from_playbook(rows: List[Dict[str, Any]], user_text: str) -> str:
+def _synthesize_from_playbook(rows: List[Dict[str, Any]], user_text: str, product: Optional[str] = None) -> str:
     if not rows:
         return "В плейбуке ничего не найдено. Уточните вопрос."
+    use_rows = rows
+    if product:
+        allowed = [t.lower() for t in PRODUCT_TOKENS.get(product, [product])]
+        disallowed = []
+        for p, toks in PRODUCT_TOKENS.items():
+            if p != product:
+                disallowed.extend([t.lower() for t in toks])
+        tmp: List[Dict[str, Any]] = []
+        for r in rows:
+            section = (r.get("section") or "").lower()
+            snip_low = (r.get("snippet") or "").lower()
+            hay = section + "\n" + snip_low
+            if not any(tok in hay for tok in allowed):
+                continue
+            if any(tok in hay for tok in disallowed):
+                continue
+            tmp.append(r)
+        if tmp:
+            use_rows = tmp
     facts = []
-    for r in rows[:6]:
+    for r in use_rows[:6]:
         snip = (r.get("snippet") or "").replace("**", "").strip()
         anchor = r.get("anchor") or f"§{r.get('ord')}"
         facts.append(f"- {snip} [#doc:Плейбук {anchor}]")
@@ -680,7 +699,7 @@ def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Op
     rows = db.search_playbook(expanded or (product or "Плейбук"), product="Плейбук", limit=30)
     rows = _filter_rows_by_product_stage(rows, product, stage)
     rows = _strict_filter_rows_by_product(rows, product)
-    return _synthesize_from_playbook(rows, user_query or product)
+    return _synthesize_from_playbook(rows, user_query or product, product)
 
 
 def validate_numbers(answer: str, has_facts: bool) -> str:
@@ -837,7 +856,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		rows = db.search_playbook(q, product="Плейбук", limit=30)
 		rows = _filter_rows_by_product_stage(rows, product, stage)
 		rows = _strict_filter_rows_by_product(rows, product)
-		ans = _synthesize_from_playbook(rows, user_clean)
+		ans = _synthesize_from_playbook(rows, user_clean, product)
 		ans = sanitize_text_assistant_output(ans)
 		ans = _normalize_bullets(ans)
 		ans = _strip_md_emphasis(ans)
@@ -927,7 +946,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			rows = db.search_playbook(q, product="Плейбук", limit=30)
 			rows = _filter_rows_by_product_stage(rows, product, stage)
 			rows = _strict_filter_rows_by_product(rows, product)
-			ans = _synthesize_from_playbook(rows, user_clean)
+			ans = _synthesize_from_playbook(rows, user_clean, product)
 			ans = sanitize_text_assistant_output(ans)
 			ans = _normalize_bullets(ans)
 			ans = _strip_md_emphasis(ans)
