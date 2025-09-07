@@ -673,10 +673,14 @@ def _synthesize_from_playbook(rows: List[Dict[str, Any]], user_text: str) -> str
     return "\n".join(facts) + takeaway
 
 def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Optional[str]:
-    # Switch to Playbook (docs/doc_passages)
-    query = slots.get("query") or ""
-    rows = db.search_playbook(query or product or "Плейбук", limit=8)
-    return _synthesize_from_playbook(rows, query)
+    """Answer using Playbook FTS with strict product/stage filtering."""
+    user_query = (slots.get("query") or "").strip()
+    stage = dc_detect_sales_stage(user_query) or None
+    expanded = _expand_query(user_query or product or "", stage, product)
+    rows = db.search_playbook(expanded or (product or "Плейбук"), product="Плейбук", limit=30)
+    rows = _filter_rows_by_product_stage(rows, product, stage)
+    rows = _strict_filter_rows_by_product(rows, product)
+    return _synthesize_from_playbook(rows, user_query or product)
 
 
 def validate_numbers(answer: str, has_facts: bool) -> str:
