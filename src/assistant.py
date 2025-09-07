@@ -661,27 +661,22 @@ def _map_natural_term(text: str) -> Optional[int]:
     return None
 
 
+def _synthesize_from_playbook(rows: List[Dict[str, Any]], user_text: str) -> str:
+    if not rows:
+        return "В плейбуке ничего не найдено. Уточните вопрос."
+    facts = []
+    for r in rows[:6]:
+        snip = (r.get("snippet") or "").replace("**", "").strip()
+        anchor = r.get("anchor") or f"§{r.get('ord')}"
+        facts.append(f"- {snip} [#doc:Плейбук {anchor}]")
+    takeaway = "\nВывод: подстройте формулировку под клиента и предложите следующий шаг."
+    return "\n".join(facts) + takeaway
+
 def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Optional[str]:
-	# RAG-only: return concatenated content excerpts from rag_docs for the product (or generic bucket)
-	docs = db.select_rag_docs_by_product(product or "Плейбуки", limit=5)
-	if not docs and product != "Плейбуки":
-		docs = db.select_rag_docs_by_product("Плейбуки", limit=5)
-	if not docs:
-		return "Нет данных в базе знаний (rag_docs). Обновите материалы."
-	# Compose simple contextual answer
-	titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
-	extracts = []
-	for d in docs[:3]:
-		cnt = (d.get("content") or "").strip()
-		if not cnt:
-			continue
-		# take first 500 chars as preview
-		extracts.append(cnt[:500].rstrip())
-	parts: List[str] = []
-	parts.append("Материалы (RAG):\n" + "\n".join(titles))
-	if extracts:
-		parts.append("\nКлючевое из материалов:\n" + "\n---\n".join(extracts))
-	return "\n".join(parts)
+    # Switch to Playbook (docs/doc_passages)
+    query = slots.get("query") or ""
+    rows = db.search_playbook(query or product or "Плейбук", limit=8)
+    return _synthesize_from_playbook(rows, query)
 
 
 def validate_numbers(answer: str, has_facts: bool) -> str:
@@ -714,7 +709,7 @@ def _is_deposit_rates_intent(text: str) -> bool:
 	return False
 
 
-def _detect_sales_stage(text: str) -> Optional[str]:
+def dc_detect_sales_stage(text: str) -> Optional[str]:
     low = text.lower()
     # objections
     if any(k in low for k in ["возраж", "дорого", "другом банке", "сомнева", "риск", "не хочу", "не буду"]):
@@ -774,7 +769,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 		return ans
 
-	# Always answer from RAG docs (RAG-only mode)
+	# Always answer from Playbook (docs/doc_passages)
 	if ("вклад" in user_clean.lower() or "депозит" in user_clean.lower()) and not _is_deposit_rates_intent(user_clean):
 		# In-branch phrase handlers to keep interactivity
 		low2 = user_clean.lower()
@@ -788,25 +783,11 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 			return ans
-		# Stage-aware RAG selection
-		stage = _detect_sales_stage(user_clean) or "продажа"
-		docs = db.select_rag_docs_by_product("Вклад", limit=30, sales_stage=stage)
-		if not docs:
-			# fallback: stage-agnostic for same product
-			docs = db.select_rag_docs_by_product("Вклад", limit=30)
-		if not docs:
-			ans = "Нет данных в базе знаний (rag_docs)."
-		else:
-			# Generate concise, actionable reply from the first matched doc
-			given = (docs[0].get("content") or "")[:1200]
-			ans = _generate_coaching_reply(client, user_clean, given)
-			# Prepend material reference
-			ans = f"Материал: {(docs[0].get('title') or '').strip()}\n\n" + ans
+		rows = db.search_playbook(user_clean, product="Плейбук", limit=8)
+		ans = _synthesize_from_playbook(rows, user_clean)
 		ans = sanitize_text_assistant_output(ans)
 		ans = _normalize_bullets(ans)
 		ans = _strip_md_emphasis(ans)
-		if tg_id != 195830791:
-			ans = re.sub(r"\s?\[S\d+\]", "", ans)
 		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 		db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 		return ans
@@ -887,11 +868,8 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 				db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 				return ans
-			docs = db.select_rag_docs_by_product("Вклад", limit=5)
-			titles = [f"- {(d.get('title') or '').strip()} [S{i}]" for i, d in enumerate(docs, start=1)]
-			coach = _build_interactive_coach("Вклад")
-			ans = ("Ключевые условия по вкладам (по материалам банка):\n" + ("\n".join(titles) if titles else "—") +
-				"\n\nЧто сказать клиенту:\n" + coach)
+			rows = db.search_playbook(user_clean, product="Плейбук", limit=8)
+			ans = _synthesize_from_playbook(rows, user_clean)
 			ans = sanitize_text_assistant_output(ans)
 			ans = _normalize_bullets(ans)
 			ans = _strip_md_emphasis(ans)
@@ -902,12 +880,11 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 			return ans
 		# Try unified financial responder first
-		fin = try_reply_financial(db, product_hint or "Плейбуки", {"currency": curr, "channel": slots.get("channel"), "amount": amt, "term_days": term, "payout_type": pt}) if product_hint else None
+		fin = try_reply_financial(db, product_hint or "Плейбук", {"query": user_clean}) if product_hint else None
 		if fin:
 			ans = sanitize_text_assistant_output(fin)
 			ans = _normalize_bullets(ans)
 			ans = _strip_md_emphasis(ans)
-			ans = validate_numbers(ans, has_facts=(product_hint == "Вклад"))
 			# Hide [F#]/[S#] for all except tg id == 195830791
 			if tg_id != 195830791:
 				ans = re.sub(r"\s?\[(?:F|S)\d+\]", "", ans)

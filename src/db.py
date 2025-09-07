@@ -431,6 +431,15 @@ class Database:
 		except Exception:
 			return []
 
+	# New: search playbook passages via RPC (docs/doc_passages)
+	def search_playbook(self, query: str, product: str = "Плейбук", limit: int = 8) -> List[Dict[str, Any]]:
+		"""Call search_passages RPC. Returns rows with keys: passage_id, ord, section, anchor, snippet, rank."""
+		try:
+			res = self.client.rpc("search_passages", {"p_product": product, "p_query": query, "p_limit": limit}).execute()
+			return getattr(res, "data", []) or []
+		except Exception:
+			return []
+
 	# New: select RAG rules by doc_ids (deprecated: rag_chunks removed) — keep for backward compatibility to return empty
 	def select_rag_rules(self, doc_ids: set[str], limit: int = 6, no_numbers: bool = True) -> List[Dict[str, Any]]:
 		# rag_chunks removed; return empty to force assistant to use select_rag_docs_by_product
