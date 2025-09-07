@@ -126,7 +126,18 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.message(Command("result"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "внести кросс")
 	async def enter_results(message: Message, state: FSMContext) -> None:
-		await message.answer("Функция временно недоступна", reply_markup=main_keyboard())
+		user_id = message.from_user.id
+		# Access уже проверен ранее, но оставим мягкую проверку
+		if not db.is_allowed(user_id):
+			await message.answer("Доступ ограничен.")
+			return
+		emp = db.get_or_register_employee(user_id)
+		if not emp:
+			await message.answer("Временная ошибка базы. Повторите позже.", reply_markup=main_keyboard())
+			return
+		await state.set_state(ResultStates.selecting)
+		await state.update_data(session=ResultSession(selected=set()).__dict__)
+		await message.answer("Отметьте продукты (чек-боксы)", reply_markup=results_keyboard(set()))
 
 	@dp.callback_query(ResultStates.selecting, F.data.startswith("toggle:"))
 	async def toggle_product(call: CallbackQuery, state: FSMContext) -> None:
