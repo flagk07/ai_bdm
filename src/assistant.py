@@ -1170,24 +1170,17 @@ PRODUCT_TOKENS: Dict[str, List[str]] = {
 }
 
 def _strict_filter_rows_by_product(rows: List[Dict[str, Any]], product: str) -> List[Dict[str, Any]]:
-    allowed = [t.lower() for t in PRODUCT_TOKENS.get(product, [product])]
-    disallowed = []
-    for p, toks in PRODUCT_TOKENS.items():
-        if p != product:
-            disallowed.extend([t.lower() for t in toks])
+    prod = (product or "").strip().lower()
     filtered: List[Dict[str, Any]] = []
     seen_sections: set[str] = set()
     for r in rows:
-        section = (r.get("section") or "").lower()
-        snippet = (r.get("snippet") or "").lower()
-        hay = section + "\n" + snippet
-        if not any(tok in hay for tok in allowed):
+        sec = (r.get("section") or "").strip()
+        sec_low = sec.lower()
+        head = sec_low.split("-")[0].strip() if "-" in sec_low else sec_low
+        if head != prod:
             continue
-        if any(tok in hay for tok in disallowed):
+        if sec in seen_sections:
             continue
-        sec_key = (r.get("section") or "").strip()
-        if sec_key in seen_sections:
-            continue
-        seen_sections.add(sec_key)
+        seen_sections.add(sec)
         filtered.append(r)
     return filtered 
