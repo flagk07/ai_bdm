@@ -454,7 +454,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 				db.log(message.from_user.id, "assistant_error", {"error": str(e)})
 			except Exception:
 				pass
-			await message.answer("Техническая пауза. Повторите запрос одним сообщением.", reply_markup=main_keyboard())
+			await message.answer("Временная ошибка. Попробуйте ещё раз.", reply_markup=main_keyboard())
 
 	# FINAL CATCH-ALL: forward any unmatched text into assistant mode
 	@dp.message()
@@ -486,4 +486,4 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 				db.log(message.from_user.id, "assistant_error_final", {"error": str(e)})
 			except Exception:
 				pass
-			await message.answer("Техническая пауза. Повторите запрос одним сообщением.", reply_markup=main_keyboard()) 
+			await message.answer("Временная ошибка. Попробуйте ещё раз.", reply_markup=main_keyboard()) 
