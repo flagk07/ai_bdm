@@ -20,6 +20,8 @@ def _normalize_output(text: str) -> str:
 	clean = clean.replace("\r\n", "\n").replace("\r", "\n")
 	# insert newline before N) bullets if not at start of line
 	clean = re.sub(r"(?<!^)\s+(?=\d{1,2}\)\s)", "\n", clean)
+	# insert newline before N. bullets if not at start of line
+	clean = re.sub(r"(?<!^)\s+(?=\d{1,2}\.\s)", "\n", clean)
 	# insert newline before hyphen bullets if not at start of line
 	clean = re.sub(r"(?<!^)\s+(?=-\s)", "\n", clean)
 	# collapse excessive blank lines
