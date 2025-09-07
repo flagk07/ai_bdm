@@ -722,15 +722,59 @@ def dc_detect_sales_stage(text: str) -> Optional[str]:
         return "продажа"
     return None
 
-def _filter_docs_by_stage(docs: List[Dict[str, Any]], stage: str) -> List[Dict[str, Any]]:
+# Backward-compatible alias used elsewhere
+def _detect_sales_stage(text: str) -> Optional[str]:
+    return dc_detect_sales_stage(text)
+
+def _detect_product(text: str) -> Optional[str]:
+    low = text.lower()
+    if any(k in low for k in ["вклад", "депозит", "депоз"]):
+        return "Вклад"
+    if any(k in low for k in ["кн", "кредит налич", "потреб"]):
+        return "КН"
+    if any(k in low for k in ["кк", "кредитн карт", "кредитная карт"]):
+        return "КК"
+    if any(k in low for k in ["дк", "дебетов", "дебетовая карт", "дебет"]):
+        return "ДК"
+    if any(k in low for k in ["ксп", "страхов", "защит карт", "коробочн"]):
+        return "КСП"
+    if any(k in low for k in ["ик", "ипотек", "ипотечн"]):
+        return "ИК"
+    if any(k in low for k in ["изп", "зарплатн проект", "зарплат"]):
+        return "ИЗП"
+    if any(k in low for k in ["нс", "накопит", "накопительный счет"]):
+        return "НС"
+    if any(k in low for k in ["пу", "пенсион"]):
+        return "ПУ"
+    return None
+
+def _expand_query(user_query: str, stage: Optional[str], product: Optional[str]) -> str:
+    expanded_query = user_query
+    if stage == "возражения":
+        expanded_query += " дорого стоимость цена бюджет покрытие франшиза"
+    elif stage == "завершение":
+        expanded_query += " завершение финал следующий шаг подключить оформить"
+    if product:
+        expanded_query += f" {product}"
+    return expanded_query
+
+def _filter_rows_by_product_stage(rows: List[Dict[str, Any]], product: str, stage: Optional[str]) -> List[Dict[str, Any]]:
+    prod_low = (product or "").lower()
     stage_low = (stage or "").lower()
-    out = []
-    for d in docs:
-        title = (d.get("title") or "").lower()
-        url = (d.get("url") or "").lower()
-        if stage_low and (stage_low in title or f"#{stage_low}/" in url):
-            out.append(d)
-    return out
+    filtered: List[Dict[str, Any]] = []
+    for r in rows:
+        section = (r.get("section") or "").lower()
+        ok_prod = prod_low in section
+        ok_stage = (stage_low in section) if stage_low else True
+        if ok_prod and ok_stage:
+            filtered.append(r)
+    # Fallback to product-only if nothing
+    if not filtered:
+        for r in rows:
+            section = (r.get("section") or "").lower()
+            if prod_low in section:
+                filtered.append(r)
+    return filtered 
 
 
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
