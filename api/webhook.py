@@ -116,36 +116,27 @@ async def health_api() -> JSONResponse:
 @app.post("/api/ingest_rag")
 @app.get("/api/ingest_rag")
 async def ingest_rag(request: Request) -> JSONResponse:
-	# Optional token protection
-	expected = os.environ.get("RAG_TOKEN") or os.environ.get("NOTIFY_TOKEN")
-	token = request.query_params.get("token")
-	if expected and token != expected:
-		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-	# product selector
-	product = (request.query_params.get("product") or "kn").lower()
-	# Run ingest in thread to avoid blocking loop too long
-	try:
-		async def _run_ingest(which: str) -> dict:
-			def _do() -> dict:
-				res = {"kn": 0, "deposit": 0}
-				if which in ("kn", "all"):
-					res["kn"] = ingest_kn_docs(db)
-				if which in ("deposit", "all"):
-					res["deposit"] = ingest_deposit_docs(db)
-				return res
-			return await asyncio.to_thread(_do)
-		resmap = await _run_ingest("all" if product == "all" else ("deposit" if product.startswith("dep") else "kn"))
-		# quick counts
-		try:
-			docs = db.client.table("rag_docs").select("id").execute()
-			chunks = db.client.table("rag_chunks").select("id").execute()
-			dc = len(getattr(docs, "data", []) or [])
-			cc = len(getattr(chunks, "data", []) or [])
-		except Exception:
-			dc, cc = None, None
-		return JSONResponse({"ok": True, "ingested": resmap, "docs": dc, "chunks": cc})
-	except Exception as e:
-		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+	return JSONResponse({"ok": False, "error": "disabled"}, status_code=410)
+
+
+@app.post("/api/import_rates")
+async def import_rates(request: Request) -> JSONResponse:
+	return JSONResponse({"ok": False, "error": "disabled"}, status_code=410)
+
+
+@app.post("/api/cleanup_deposits")
+async def cleanup_deposits(request: Request) -> JSONResponse:
+	return JSONResponse({"ok": False, "error": "disabled"}, status_code=410)
+
+
+@app.post("/api/ingest_deposit_custom")
+async def ingest_deposit_custom(request: Request) -> JSONResponse:
+	return JSONResponse({"ok": False, "error": "disabled"}, status_code=410)
+
+
+@app.post("/api/rag_reset_single")
+async def rag_reset_single(request: Request) -> JSONResponse:
+	return JSONResponse({"ok": False, "error": "disabled"}, status_code=410)
 
 
 @app.post("/api/add_allowed")
@@ -184,220 +175,6 @@ async def add_allowed(request: Request) -> JSONResponse:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
-@app.post("/api/import_rates")
-async def import_rates(request: Request) -> JSONResponse:
-	# Token protection
-	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
-	token = request.query_params.get("token")
-	if expected and token != expected:
-		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-	# Parse JSON array of rows
-	try:
-		payload = await request.json()
-		if not isinstance(payload, list):
-			return JSONResponse({"ok": False, "error": "expected JSON array"}, status_code=400)
-		rows: list[dict] = []
-		for item in payload:
-			if not isinstance(item, dict):
-				continue
-			row: dict = {
-				"product_code": item.get("product_code") or "Вклад",
-				"payout_type": item.get("payout_type"),
-				"term_days": int(item.get("term_days")),
-				"amount_min": float(item.get("amount_min")),
-				"amount_max": (float(item.get("amount_max")) if item.get("amount_max") is not None else None),
-				"amount_inclusive_end": bool(item.get("amount_inclusive_end", True)),
-				"rate_percent": float(item.get("rate_percent")),
-				"channel": item.get("channel"),
-				"effective_from": item.get("effective_from"),
-				"effective_to": item.get("effective_to"),
-				"source_url": item.get("source_url"),
-				"source_page": (int(item.get("source_page")) if item.get("source_page") is not None else None),
-			}
-			# optional currency
-			if item.get("currency") is not None:
-				row["currency"] = item.get("currency")
-			# optional plan_name
-			if item.get("plan_name") is not None:
-				row["plan_name"] = item.get("plan_name")
-			rows.append(row)
-		# Upsert (insert) facts
-		await asyncio.to_thread(db.product_rates_upsert, rows)
-		return JSONResponse({"ok": True, "inserted": len(rows)})
-	except Exception as e:
-		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-
-
-@app.post("/api/cleanup_deposits")
-async def cleanup_deposits(request: Request) -> JSONResponse:
-	# Token protection
-	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
-	token = request.query_params.get("token")
-	if expected and token != expected:
-		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-	try:
-		def _do() -> dict:
-			# delete depo_rates for deposits
-			try:
-				db.client.table("depo_rates").delete().eq("product_code", "Вклад").execute()
-			except Exception:
-				pass
-			# delete rag_docs for deposits (rag_chunks no longer used)
-			try:
-				# find deposit docs
-				docs = db.client.table("rag_docs").select("id").eq("product_code", "Вклад").execute()
-				ids = [r["id"] for r in (getattr(docs, "data", []) or [])]
-				# delete docs
-				db.client.table("rag_docs").delete().eq("product_code", "Вклад").execute()
-			except Exception:
-				pass
-			return {"rates_deleted": True, "docs_deleted": True}
-		res = await asyncio.to_thread(_do)
-		return JSONResponse({"ok": True, **res})
-	except Exception as e:
-		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-
-
-@app.post("/api/ingest_deposit_custom")
-async def ingest_deposit_custom(request: Request) -> JSONResponse:
-	# Token protection
-	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
-	token = request.query_params.get("token")
-	if expected and token != expected:
-		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-	# Parse body
-	try:
-		payload = await request.json()
-		urls = payload.get("urls") if isinstance(payload, dict) else None
-		if not urls or not isinstance(urls, list):
-			return JSONResponse({"ok": False, "error": "expected {\"urls\":[...]}"}, status_code=400)
-	except Exception as e:
-		try:
-			db.log(None, "ingest_deposit_custom_exception", {"error": str(e)})
-		except Exception:
-			pass
-		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-	# Log start
-	try:
-		db.log(None, "ingest_deposit_custom_start", {"count": len(urls)})
-	except Exception:
-		pass
-	# Define worker
-	try:
-		def _do() -> dict:
-			import src.rag as rag_mod
-			count = 0
-			for u in urls:
-				try:
-					mime, title, text = rag_mod._fetch_text_from_url(u)
-					if not text:
-						continue
-					row = {"url": u, "title": title, "product_code": "Вклад", "mime": mime, "content": text}
-					# upsert doc
-					doc_id = None
-					try:
-						ins = db.client.table("rag_docs").upsert(row, on_conflict="url").select("id").eq("url", u).maybe_single().execute()
-						doc = getattr(ins, "data", None)
-						if doc and doc.get("id"):
-							doc_id = doc["id"]
-					except Exception:
-						try:
-							db.client.table("rag_docs").delete().eq("url", u).execute()
-							db.client.table("rag_docs").insert(row).execute()
-							sel = db.client.table("rag_docs").select("id").eq("url", u).single().execute()
-							doc_id = getattr(sel, "data", {}).get("id")
-						except Exception:
-							continue
-					if not doc_id:
-						try:
-							sel2 = db.client.table("rag_docs").select("id").eq("url", u).single().execute()
-							doc_id = getattr(sel2, "data", {}).get("id")
-						except Exception:
-							pass
-					if not doc_id:
-						continue
-					# no rag_chunks creation
-					count += 1
-				except Exception:
-					continue
-			# parse rates from the first URL only (best-effort)
-			try:
-				first_url = urls[0]
-				mime, title, text = rag_mod._fetch_text_from_url(first_url)
-				import re as _re
-				lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-				rows: list[dict] = []
-				current_payout = None
-				for ln in lines:
-					low = ln.lower()
-					if "ежемесячно" in low:
-						current_payout = "monthly"
-					elif "в конце срока" in low:
-						current_payout = "end"
-					m = _re.findall(r"(61|91|122|181|274|367|550|730|1100).*?(\d{1,2}[\.,]\d)\s*%.*?(\d{1,2}[\.,]\d)\s*%", low)
-					if m and current_payout:
-						term = int(m[0][0])
-						rate1 = float(m[0][1].replace(',', '.'))
-						rate2 = float(m[0][2].replace(',', '.'))
-						rows.append({
-							"product_code": "Вклад",
-							"payout_type": current_payout,
-							"term_days": term,
-							"amount_min": 30000.0,
-							"amount_max": 999999.99,
-							"amount_inclusive_end": True,
-							"rate_percent": rate1,
-							"channel": None,
-							"effective_from": None,
-							"effective_to": None,
-							"source_url": first_url,
-							"source_page": None,
-						})
-						rows.append({
-							"product_code": "Вклад",
-							"payout_type": current_payout,
-							"term_days": term,
-							"amount_min": 1000000.0,
-							"amount_max": 15000000.0,
-							"amount_inclusive_end": True,
-							"rate_percent": rate2,
-							"channel": None,
-							"effective_from": None,
-							"effective_to": None,
-							"source_url": first_url,
-							"source_page": None,
-						})
-				if rows:
-					db.product_rates_upsert(rows)
-			except Exception:
-				pass
-			return {"docs": count}
-		# Start background job
-		async def _run_bg() -> None:
-			try:
-				res = await asyncio.to_thread(_do)
-				try:
-					db.log(None, "ingest_deposit_custom_done", res)
-				except Exception:
-					pass
-			except Exception as e:
-				try:
-					db.log(None, "ingest_deposit_custom_error", {"error": str(e)})
-				except Exception:
-					pass
-		try:
-			asyncio.create_task(_run_bg())
-		except Exception:
-			pass
-		return JSONResponse({"ok": True, "started": True, "count_urls": len(urls)})
-	except Exception as e:
-		try:
-			db.log(None, "ingest_deposit_custom_exception", {"error": str(e)})
-		except Exception:
-			pass
-		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
 @app.post("/api/assistant_test")
 async def assistant_test(request: Request) -> JSONResponse:
 	# Protected testing endpoint to ask assistant directly
@@ -431,44 +208,6 @@ async def assistant_test(request: Request) -> JSONResponse:
 		except Exception:
 			pass
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
-@app.post("/api/rag_reset_single")
-async def rag_reset_single(request: Request) -> JSONResponse:
-	# Token protection
-	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
-	token = request.query_params.get("token")
-	if expected and token != expected:
-		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-	try:
-		payload = await request.json()
-		bucket = payload.get("bucket")
-		path = payload.get("path")
-		product_code = payload.get("product_code") or "Плейбуки"
-		if not bucket or not path:
-			return JSONResponse({"ok": False, "error": "expected {\"bucket\":..., \"path\":...}"}, status_code=400)
-		def _do() -> dict:
-			import src.rag as rag_mod
-			# wipe rag_docs
-			try:
-				db.client.table("rag_docs").delete().neq("id", 0).execute()
-			except Exception:
-				pass
-			# fetch text from storage and insert single row
-			mime, title, text = rag_mod._fetch_text_from_url(f"supabase://{bucket}/{path}")
-			row = {
-				"url": f"supabase://{bucket}/{path}",
-				"title": title or path,
-				"product_code": product_code,
-				"mime": mime or "text/plain",
-				"content": text or "",
-			}
-			ins = db.client.table("rag_docs").insert(row).execute()
-			return {"inserted": 1, "product_code": product_code}
-		res = await asyncio.to_thread(_do)
-		return JSONResponse({"ok": True, **res})
-	except Exception as e:
-		return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.post("/webhook")

@@ -802,9 +802,15 @@ def _filter_rows_by_product_stage(rows: List[Dict[str, Any]], product: str, stag
 
 def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: Dict[str, Any], group_month_ranking: List[Dict[str, Any]], user_message: str) -> str:
 	settings = get_settings()
-	client = OpenAI(api_key=settings.openai_api_key)
-
+	# Neutral minimal assistant: log and echo intent without external lookups
 	user_clean = sanitize_text_assistant_output(user_message)
+	answer_clean = "Ассистент временно без знаний. Опишите задачу — я зафиксирую и вернусь с уточнениями."
+	try:
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "assistant", answer_clean, off_topic=False)
+	except Exception:
+		pass
+	return answer_clean
 	# Natural term mapping into slots (best-effort)
 	try:
 		mapped = _map_natural_term(user_clean)
