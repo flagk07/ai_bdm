@@ -827,7 +827,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 			return ans
-		stage = _detect_sales_stage(user_clean) or "продажа"
+		stage = dc_detect_sales_stage(user_clean) or "продажа"
 		product = _detect_product(user_clean) or "Вклад"
 		q = _expand_query(user_clean, stage, product)
 		rows = db.search_playbook(q, product="Плейбук", limit=30)
@@ -917,7 +917,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 				db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
 				db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 				return ans
-			stage = _detect_sales_stage(user_clean) or "продажа"
+			stage = dc_detect_sales_stage(user_clean) or "продажа"
 			product = _detect_product(user_clean) or "Вклад"
 			q = _expand_query(user_clean, stage, product)
 			rows = db.search_playbook(q, product="Плейбук", limit=30)
@@ -934,7 +934,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			db.add_assistant_message(tg_id, "assistant", ans, off_topic=False)
 			return ans
 		# Try unified financial responder first
-		stage = _detect_sales_stage(user_clean) or None
+		stage = dc_detect_sales_stage(user_clean) or None
 		product = _detect_product(user_clean) or product_hint or None
 		q = _expand_query(user_clean, stage, product)
 		fin = try_reply_financial(db, product_hint or "Плейбук", {"query": q}) if product_hint else None
