@@ -786,7 +786,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		stage = _detect_sales_stage(user_clean) or "продажа"
 		product = _detect_product(user_clean) or "Вклад"
 		q = _expand_query(user_clean, stage, product)
-		rows = db.search_playbook(q, product="Плейбук", limit=12)
+		rows = db.search_playbook(q, product="Плейбук", limit=20)
 		rows = _filter_rows_by_product_stage(rows, product, stage)
 		ans = _synthesize_from_playbook(rows, user_clean)
 		ans = sanitize_text_assistant_output(ans)
@@ -875,7 +875,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			stage = _detect_sales_stage(user_clean) or "продажа"
 			product = _detect_product(user_clean) or "Вклад"
 			q = _expand_query(user_clean, stage, product)
-			rows = db.search_playbook(q, product="Плейбук", limit=12)
+			rows = db.search_playbook(q, product="Плейбук", limit=20)
 			rows = _filter_rows_by_product_stage(rows, product, stage)
 			ans = _synthesize_from_playbook(rows, user_clean)
 			ans = sanitize_text_assistant_output(ans)

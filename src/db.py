@@ -440,6 +440,17 @@ class Database:
 		except Exception:
 			return []
 
+	def fetch_passages_by_ids(self, ids: List[int]) -> Dict[int, Dict[str, Any]]:
+		"""Load full passages from doc_passages by ids. Requires RLS select allowed."""
+		if not ids:
+			return {}
+		try:
+			res = self.client.table("doc_passages").select("id, section, anchor, passage").in_("id", ids).execute()
+			rows = getattr(res, "data", []) or []
+			return {int(r["id"]): r for r in rows}
+		except Exception:
+			return {}
+
 	# New: select RAG rules by doc_ids (deprecated: rag_chunks removed) — keep for backward compatibility to return empty
 	def select_rag_rules(self, doc_ids: set[str], limit: int = 6, no_numbers: bool = True) -> List[Dict[str, Any]]:
 		# rag_chunks removed; return empty to force assistant to use select_rag_docs_by_product
