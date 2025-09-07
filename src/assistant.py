@@ -786,8 +786,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		stage = _detect_sales_stage(user_clean) or "продажа"
 		product = _detect_product(user_clean) or "Вклад"
 		q = _expand_query(user_clean, stage, product)
-		rows = db.search_playbook(q, product="Плейбук", limit=20)
+		rows = db.search_playbook(q, product="Плейбук", limit=30)
 		rows = _filter_rows_by_product_stage(rows, product, stage)
+		rows = _strict_filter_rows_by_product(rows, product)
 		ans = _synthesize_from_playbook(rows, user_clean)
 		ans = sanitize_text_assistant_output(ans)
 		ans = _normalize_bullets(ans)
@@ -875,8 +876,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			stage = _detect_sales_stage(user_clean) or "продажа"
 			product = _detect_product(user_clean) or "Вклад"
 			q = _expand_query(user_clean, stage, product)
-			rows = db.search_playbook(q, product="Плейбук", limit=20)
+			rows = db.search_playbook(q, product="Плейбук", limit=30)
 			rows = _filter_rows_by_product_stage(rows, product, stage)
+			rows = _strict_filter_rows_by_product(rows, product)
 			ans = _synthesize_from_playbook(rows, user_clean)
 			ans = sanitize_text_assistant_output(ans)
 			ans = _normalize_bullets(ans)
@@ -1087,3 +1089,38 @@ def _build_interactive_coach(product: str) -> str:
         lines.append("- Закрытие: согласуем следующий шаг в 1 клик.")
         q = "Что выбираем: 1) простота 2) доход/экономия 3) гибкость 4) показать оба варианта?"
     return "\n".join(lines) + "\n" + q 
+
+PRODUCT_TOKENS: Dict[str, List[str]] = {
+    "Вклад": ["вклад", "депозит"],
+    "КН": ["кн", "кредит налич", "потреб"],
+    "КК": ["кк", "кредитн карт"],
+    "ДК": ["дк", "дебет", "дебетов"],
+    "КСП": ["ксп", "страхов", "защит карт"],
+    "ИК": ["ик", "ипотек"],
+    "ИЗП": ["изп", "зарплатн проект"],
+    "НС": ["нс", "накопит"],
+    "ПУ": ["пу", "пенсион"],
+}
+
+def _strict_filter_rows_by_product(rows: List[Dict[str, Any]], product: str) -> List[Dict[str, Any]]:
+    allowed = [t.lower() for t in PRODUCT_TOKENS.get(product, [product])]
+    disallowed = []
+    for p, toks in PRODUCT_TOKENS.items():
+        if p != product:
+            disallowed.extend([t.lower() for t in toks])
+    filtered: List[Dict[str, Any]] = []
+    seen_sections: set[str] = set()
+    for r in rows:
+        section = (r.get("section") or "").lower()
+        snippet = (r.get("snippet") or "").lower()
+        hay = section + "\n" + snippet
+        if not any(tok in hay for tok in allowed):
+            continue
+        if any(tok in hay for tok in disallowed):
+            continue
+        sec_key = (r.get("section") or "").strip()
+        if sec_key in seen_sections:
+            continue
+        seen_sections.add(sec_key)
+        filtered.append(r)
+    return filtered 
