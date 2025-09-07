@@ -215,7 +215,13 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.message(Command("meet"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "внести встречу")
 	async def meet_start(message: Message, state: FSMContext) -> None:
-		await message.answer("Функция временно недоступна", reply_markup=main_keyboard())
+		user_id = message.from_user.id
+		if not db.is_allowed(user_id):
+			await message.answer("Доступ ограничен.")
+			return
+		await state.set_state(MeetStates.selecting)
+		await state.update_data(meet=MeetSession(product=None).__dict__)
+		await message.answer("Выберите продукт доставки (один на сессию)", reply_markup=meet_keyboard(None))
 
 	@dp.callback_query(MeetStates.selecting, F.data.startswith("meet:"))
 	async def meet_pick(call: CallbackQuery, state: FSMContext) -> None:
@@ -303,14 +309,33 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.message(Command("stats"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "статистика")
 	async def stats_handler(message: Message) -> None:
-		await message.answer("Функция временно недоступна", reply_markup=main_keyboard())
+		user_id = message.from_user.id
+		if not db.is_allowed(user_id):
+			await message.answer("Доступ ограничен.")
+			return
+		emp = db.get_or_register_employee(user_id)
+		if not emp:
+			await message.answer("Временная ошибка базы. Повторите позже.")
+			return
+		today = date.today()
+		stats = db.stats_day_week_month(user_id, today)
+		plan = db.compute_plan_breakdown(user_id, today)
+		lines = []
+		lines.append(f"1) Сегодня: {int(stats['today']['total'])} / план {int(plan['plan_day'])}")
+		lines.append(f"2) Неделя: {int(stats['week']['total'])} / план {int(plan['plan_week'])}")
+		lines.append(f"3) Месяц: {int(stats['month']['total'])} / план {int(plan['plan_month'])}")
+		await message.answer("\n".join(lines), reply_markup=main_keyboard())
 
 	# Notes and Assistant handlers below remain unchanged
 	@dp.message(F.text == "Заметки")
 	@dp.message(Command("notes"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "заметки")
 	async def notes_menu(message: Message) -> None:
-		await message.answer("Функция временно недоступна", reply_markup=main_keyboard())
+		kb = InlineKeyboardMarkup(inline_keyboard=[
+			[InlineKeyboardButton(text="Внести комментарий", callback_data="note:add")],
+			[InlineKeyboardButton(text="Мои комментарии", callback_data="note:list")],
+		])
+		await message.answer("Заметки:", reply_markup=kb)
 
 	@dp.callback_query(F.data == "note:add")
 	async def note_add_start(call: CallbackQuery, state: FSMContext) -> None:
