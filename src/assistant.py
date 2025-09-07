@@ -19,7 +19,7 @@ ALLOWED_TOPICS_HINT = (
 
 
 def _chat_completion_with_fallback(client: OpenAI, model: str, messages: List[Dict[str, str]], temperature: float, max_tokens: int) -> str:
-	"""Call Chat Completions with a safe fallback to gpt-4o-mini if the model is unavailable.
+	"""Call Chat Completions with a safe fallback to gpt-4o if the model is unavailable.
 	- Triggers fallback on common provider errors like model_not_found/404/does not exist.
 	"""
 	try:
@@ -1173,14 +1173,33 @@ def _strict_filter_rows_by_product(rows: List[Dict[str, Any]], product: str) -> 
     prod = (product or "").strip().lower()
     filtered: List[Dict[str, Any]] = []
     seen_sections: set[str] = set()
+    def _norm_head(section: str) -> str:
+        s = (section or "").strip()
+        # drop markdown hashes and bullets
+        s = s.lstrip("# ")
+        low = s.lower()
+        head = low.split("-")[0].strip() if "-" in low else low
+        return head
+    # strict pass: require exact head match
     for r in rows:
         sec = (r.get("section") or "").strip()
-        sec_low = sec.lower()
-        head = sec_low.split("-")[0].strip() if "-" in sec_low else sec_low
-        if head != prod:
+        if _norm_head(sec) != prod:
             continue
         if sec in seen_sections:
             continue
         seen_sections.add(sec)
         filtered.append(r)
+    if filtered:
+        return filtered
+    # fallback: keep rows where product token appears in section (product-only), exclude other products
+    disallowed = set([p.lower() for p in PRODUCT_TOKENS.keys() if p.lower() != prod])
+    for r in rows:
+        sec = (r.get("section") or "").strip()
+        low = sec.lower()
+        if prod in low and not any(dp in low.split()[:3] for dp in disallowed):
+            key = sec
+            if key in seen_sections:
+                continue
+            seen_sections.add(key)
+            filtered.append(r)
     return filtered 
