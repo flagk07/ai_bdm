@@ -35,7 +35,7 @@ def _chat_completion_with_fallback(client: OpenAI, model: str, messages: List[Di
 		if ("model_not_found" in emsg) or ("does not exist" in emsg) or ("404" in emsg):
 			# Fallback model tuned for speed/cost
 			resp = client.chat.completions.create(
-				model="gpt-4o-mini",
+				model="gpt-4o",
 				messages=messages,
 				temperature=temperature,
 				max_tokens=max_tokens,
@@ -695,7 +695,7 @@ def try_reply_financial(db: Database, product: str, slots: Dict[str, Any]) -> Op
     """Answer using Playbook FTS with strict product/stage filtering."""
     user_query = (slots.get("query") or "").strip()
     stage = dc_detect_sales_stage(user_query) or None
-    expanded = _expand_query(user_query or product or "", stage, product)
+    expanded = (user_query or product or "")
     rows = db.search_playbook(expanded or (product or "Плейбук"), product="Плейбук", limit=30)
     rows = _filter_rows_by_product_stage(rows, product, stage)
     rows = _strict_filter_rows_by_product(rows, product)
@@ -763,11 +763,11 @@ def _detect_product(text: str) -> Optional[str]:
         return "КСП"
     if any(k in low for k in ["ик", "ипотек", "ипотечн"]):
         return "ИК"
-    if any(k in low for k in ["изп", "зарплатн проект", "зарплат"]):
+    if any(k in low for k in ["изп", "зарплатн проект", "зарплат", "зарплат карт"]):
         return "ИЗП"
-    if any(k in low for k in ["нс", "накопит", "накопительный счет"]):
+    if any(k in low for k in ["нс", "накопит", "накоп", "накопительный счет"]):
         return "НС"
-    if any(k in low for k in ["пу", "пенсион"]):
+    if any(k in low for k in ["пу", "премиум", "премиальный", "прем"]):
         return "ПУ"
     return None
 
@@ -852,7 +852,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 			return ans
 		stage = dc_detect_sales_stage(user_clean) or "продажа"
 		product = _detect_product(user_clean) or "Вклад"
-		q = _expand_query(user_clean, stage, product)
+		q = user_clean
 		rows = db.search_playbook(q, product="Плейбук", limit=30)
 		rows = _filter_rows_by_product_stage(rows, product, stage)
 		rows = _strict_filter_rows_by_product(rows, product)
@@ -942,7 +942,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 				return ans
 			stage = dc_detect_sales_stage(user_clean) or "продажа"
 			product = _detect_product(user_clean) or "Вклад"
-			q = _expand_query(user_clean, stage, product)
+			q = user_clean
 			rows = db.search_playbook(q, product="Плейбук", limit=30)
 			rows = _filter_rows_by_product_stage(rows, product, stage)
 			rows = _strict_filter_rows_by_product(rows, product)
@@ -959,7 +959,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		# Try unified financial responder first
 		stage = dc_detect_sales_stage(user_clean) or None
 		product = _detect_product(user_clean) or product_hint or None
-		q = _expand_query(user_clean, stage, product)
+		q = user_clean
 		fin = try_reply_financial(db, product_hint or "Плейбук", {"query": q}) if product_hint else None
 		if fin:
 			ans = sanitize_text_assistant_output(fin)
