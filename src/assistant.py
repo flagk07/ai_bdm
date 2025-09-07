@@ -5,9 +5,11 @@ from typing import Any, Dict, List
 from openai import OpenAI
 import re
 
-from .db import Database
+from .db import Database, is_workday
 from .pii import sanitize_text_assistant_output
 from .config import get_settings
+from datetime import datetime
+import pytz
 
 
 def _normalize_output(text: str) -> str:
@@ -47,6 +49,9 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		"- на вопросы отвечай максимально конкретно \n"
 		"- не используй никаких персональных данных при ответах\n"
 		"- не веди диалог на посторонние темы, если получишь сообщение не по теме, вежливо уточни, что общаешься только по продажам продуктов и услуг банка\n"
+        "- не отвечай на вопросы о суммах, сроках, ставках и прочей точной информации, которая зависит от конкретной организации, вежливой рекомендуй сотруднику уточнить информацию в раздаточных метериалах\n"
+        "- если сотрудник сам указывает в сообщении точную информацию (суммы, сроки, ставки и тд) - можешь ей оперировать в диалоге\n"
+        "- не противореч сам себе в ответах\n"
 		"- используй информацию о сокращениях из Продукты банка для кросс продаж и Продукты банка для оформления при диалоге с сотрудником\n\n"
 		"Стиль ответа\n"
 		"- используй эмодзи для эмоцинального окраса (1-2 в сообщении)\n"
@@ -54,6 +59,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		"- предлагай дополнительные варианты решения вопросов\n"
 		"- ставь цели в формате SMART\n"
 		"- в вежливой форме требуй от сотрудников выполнения поставленных целей\n"
+        "- подкрепляй ответы расчетами и цифрами если это уместно и это не противоречит предыдущим инструкциям\n"
 		"- общаешься на \"Ты\"\n\n"
 		"Пример ответа\n"
 		"- Для увеличения процента прониновения продаж во встречи попробуй выявить потребность задав не менее 3х уточняющих вопросов\n"
@@ -81,7 +87,17 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 		"- КК - кредитная карта\n"
 		"- Аккредитив - аккредитив"
 	)
-	messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+	# calendar context
+	tz = pytz.timezone(settings.timezone)
+	now = datetime.now(tz)
+	d = now.date()
+	weekday = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"][d.weekday()]
+	workflag = "рабочий" if is_workday(d) else "выходной"
+	calendar_info = f"Календарь: сегодня {d.isoformat()} ({weekday}), {workflag}; время {now.strftime('%H:%M')} {settings.timezone}"
+	messages: List[Dict[str, str]] = [
+		{"role": "system", "content": system_prompt},
+		{"role": "system", "content": calendar_info},
+	]
 	# Pull last 10 messages from history and add to context (role, content)
 	try:
 		history = db.get_assistant_messages(tg_id, limit=10)
