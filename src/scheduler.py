@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, Tuple, List
+import json
 import re
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -256,7 +257,34 @@ class StatsScheduler:
 			# RR month
 			lines.append(f"- RR месяца: прогноз факта {rr} / {rr_pct}% прогноз выполнения")
 			text = header + "\n".join(lines) + "\n"
-			# Only server numeric summary (no AI conclusions)
+			# AUTO_SUMMARY: build policy + STATS_JSON and get AI conclusions
+			payload = {
+				"period": {"label": "Месяц", "start": start_month.isoformat(), "end": today.isoformat()},
+				"current": {
+					"day":   {"fact": today_total,  "plan": p_day,   "done_pct": int(round(c_day)),   "meet": m_day,   "penetration_pct": int(round(pen_day))},
+					"week":  {"fact": week_total,  "plan": p_week,  "done_pct": int(round(c_week)),  "meet": m_week,  "penetration_pct": int(round(pen_week))},
+					"month": {"fact": month_total, "plan": p_month, "done_pct": int(round(c_month)), "meet": m_month, "penetration_pct": int(round(pen_month)), "rr": rr, "rr_pct": rr_pct},
+				},
+				"previous": {
+					"day":   {"fact": prev_day_total},
+					"week":  {"fact": prev_week_total},
+					"month": {"fact": prev_month_total},
+				},
+			}
+			policy = (
+				"[AUTO_SUMMARY_POLICY]\n"
+				"Задача\n- Оценка результатов из STATS_JSON\n- Формирование выводов и рекомендаций на основании оцененных результатов\n\n"
+				"Правила\n- Числа разрешено брать ТОЛЬКО из STATS_JSON. Ничего не придумывай и не изменяй\n- Остальные правила из системного промпта\n\n"
+				"Формат ответа\n1. Выводы по текущим результатам\n<сгенерированный ответ выводов о работе на основании результатов>\n"
+				"2. Рекомендации и цели\n<сгенерированный ответ с рекомендациями и целями по повышению эффективности работы на основании результатов и выводов>\n"
+			)
+			ai_prompt = (
+				policy + "\n[STATS_JSON]\n" + json.dumps(payload, ensure_ascii=False)
+			)
+			stats_dwm = self.db.stats_day_week_month(tg, today)
+			month_rank = self.db.month_ranking(start_month, end_month)
+			comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, ai_prompt)
+			text += self._shape_ai_comment(comment) + "\n"
 			# Store auto-sent summary in assistant_messages (auto=true)
 			try:
 				self.db.add_assistant_message(tg, "assistant", text, off_topic=False, auto=True)
