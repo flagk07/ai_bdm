@@ -105,6 +105,12 @@ class StatsScheduler:
 		# get all employees
 		emps = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
 		for r in (emps.data or []):
+			# restrict autosummaries to tester only
+			try:
+				if int(r["tg_id"]) != 195830791:
+					continue
+			except Exception:
+				continue
 			stats = self.db.stats_day_week_month(int(r["tg_id"]), today)
 			text = (
 				f"{r['agent_name']}: сегодня {stats['today']['total']}, неделя {stats['week']['total']}, месяц {stats['month']['total']}"
@@ -153,7 +159,13 @@ class StatsScheduler:
 
 		emps = self.db.client.table("employees").select("tg_id, agent_name, active, created_at").eq("active", True).execute()
 		for r in (emps.data or []):
-			tg = int(r["tg_id"])
+			# restrict autosummaries to tester only
+			try:
+				tg = int(r["tg_id"])
+				if tg != 195830791:
+					continue
+			except Exception:
+				continue
 			name = r["agent_name"]
 			# parse employee registration date
 			created_at_raw = r.get("created_at")
