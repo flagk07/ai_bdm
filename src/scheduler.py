@@ -234,28 +234,32 @@ class StatsScheduler:
 			# build FACTS map for [F#] citations
 			# internal facts retained for prompt only; не выводим пользователю
 			facts_lines: List[str] = []
-			# message header and lines with "- " and [F#] citations
+			# message header and lines with penetration-focused metrics
 			header = f"{name} — авто‑сводка\n"
+			# previous period penetrations for deltas
+			m_prev_day = self.db.meets_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+			linked_prev_day = self.db.attempts_linked_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+			pen_prev_day = (linked_prev_day * 100 / m_prev_day) if m_prev_day > 0 else 0
+			m_prev_week = self.db.meets_period_count(tg, start_prev_w, end_prev_w)
+			linked_prev_week = self.db.attempts_linked_period_count(tg, start_prev_w, end_prev_w)
+			pen_prev_week = (linked_prev_week * 100 / m_prev_week) if m_prev_week > 0 else 0
+			m_prev_month = self.db.meets_period_count(tg, start_prev_m, end_prev_m)
+			linked_prev_month = self.db.attempts_linked_period_count(tg, start_prev_m, end_prev_m)
+			pen_prev_month = (linked_prev_month * 100 / m_prev_month) if m_prev_month > 0 else 0
+			# completion vs plan (Variant A): (fact_pen / plan_pen) * 100
+			pen_target = int(self.db.compute_plan_breakdown(tg, today).get('penetration_target_pct', 50))
+			comp_day = int(round((pen_day / (pen_target if pen_target > 0 else 1)) * 100))
+			comp_week = int(round((pen_week / (pen_target if pen_target > 0 else 1)) * 100))
+			comp_month = int(round((pen_month / (pen_target if pen_target > 0 else 1)) * 100))
+			# deltas by penetration percent
+			d_pen_day = self._delta_pct(int(round(pen_day)), int(round(pen_prev_day)))
+			d_pen_week = self._delta_pct(int(round(pen_week)), int(round(pen_prev_week)))
+			d_pen_month = self._delta_pct(int(round(pen_month)), int(round(pen_prev_month)))
 			lines = []
-			# day line
-			if show_d_day:
-				lines.append(f"- Сегодня: {today_total} факт / {p_day} план / {self._fmt1(c_day)}% выполнение / {self._fmt1(pen_day)}% проникновение / Δ {self._format_delta(d_day)}%")
-			else:
-				lines.append(f"- Сегодня: {today_total} факт / {p_day} план / {self._fmt1(c_day)}% выполнение / {self._fmt1(pen_day)}% проникновение")
-			# products
+			lines.append(f"- Сегодня: {self._fmt1(pen_day)}% ({today_total}шт.) факт / {pen_target}% план / {self._fmt1(comp_day)}% выполнение / Δ {self._format_delta(d_pen_day)}%")
 			lines.append(f"- Сегодня по продуктам: {breakdown}")
-			# week line
-			if show_d_week:
-				lines.append(f"- Неделя: {week_total} факт / {p_week} план / {self._fmt1(c_week)}% выполнение / {self._fmt1(pen_week)}% проникновение / Δ {self._format_delta(d_week)}%")
-			else:
-				lines.append(f"- Неделя: {week_total} факт / {p_week} план / {self._fmt1(c_week)}% выполнение / {self._fmt1(pen_week)}% проникновение")
-			# month line
-			if show_d_month:
-				lines.append(f"- Месяц: {month_total} факт / {p_month} план / {self._fmt1(c_month)}% выполнение / {self._fmt1(pen_month)}% проникновение / Δ {self._format_delta(d_month)}%")
-			else:
-				lines.append(f"- Месяц: {month_total} факт / {p_month} план / {self._fmt1(c_month)}% выполнение / {self._fmt1(pen_month)}% проникновение")
-			# RR month
-			lines.append(f"- RR месяца: прогноз факта {rr} / {rr_pct}% прогноз выполнения")
+			lines.append(f"- Неделя: {self._fmt1(pen_week)}% ({week_total}шт.) факт / {pen_target}% план / {self._fmt1(comp_week)}% выполнение / Δ {self._format_delta(d_pen_week)}%")
+			lines.append(f"- Месяц: {self._fmt1(pen_month)}% ({month_total}шт.) факт / {pen_target}% план / {self._fmt1(comp_month)}% выполнение / Δ {self._format_delta(d_pen_month)}%")
 			text = header + "\n".join(lines) + "\n"
 			# AUTO_SUMMARY: build policy + STATS_JSON and get AI conclusions (penetration target)
 			pen_target = int(self.db.compute_plan_breakdown(tg, today).get('penetration_target_pct', 50))
