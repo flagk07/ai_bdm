@@ -328,14 +328,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		day_total = int(stats['today']['total'])
 		week_total = int(stats['week']['total'])
 		month_total = int(stats['month']['total'])
-		p_day = int(plan['plan_day'])
-		p_week = int(plan['plan_week'])
-		p_month = int(plan['plan_month'])
-		perc_day = int(round(day_total * 100 / p_day)) if p_day > 0 else 0
-		perc_week = int(round(week_total * 100 / p_week)) if p_week > 0 else 0
-		perc_month = int(round(month_total * 100 / p_month)) if p_month > 0 else 0
-		rr = int(plan['rr_month'])
-		rr_pct = int(round(rr * 100 / p_month)) if p_month > 0 else 0
+		pen_target = int(plan.get('penetration_target_pct', 50))
 		start_week = today - timedelta(days=today.weekday())
 		start_month = today.replace(day=1)
 		m_day = db.meets_period_count(user_id, today, today)
@@ -358,15 +351,14 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		lines: List[str] = []
 		lines.append(f"🏆 Агент: {emp.agent_name} — место за месяц: {pos if pos else '—'}")
 		lines.append("1. Сегодня:")
-		lines.append(f"- кросс продажи: {day_total} факт / {p_day} план / {perc_day}% выполнение ")
-		lines.append(f"- встречи: {m_day} проведено / {_fmt1(pen_day)}% проникновение кросс-продаж")
+		lines.append(f"- встречи: {m_day} / проникновение {_fmt1(pen_day)}% (цель {pen_target}%)")
+		lines.append(f"- кросс продажи: {day_total} факт")
 		lines.append("2. Неделя:")
-		lines.append(f"- кросс продажи: {week_total} факт / {p_week} план / {perc_week}% выполнение ")
-		lines.append(f"- встречи: {m_week} проведено / {_fmt1(pen_week)}% проникновение кросс-продаж")
+		lines.append(f"- встречи: {m_week} / проникновение {_fmt1(pen_week)}% (цель {pen_target}%)")
+		lines.append(f"- кросс продажи: {week_total} факт")
 		lines.append("3. Месяц:")
-		lines.append(f"- кросс продажи: {month_total} факт / {p_month} план / {perc_month}% выполнение ")
-		lines.append(f"- встречи: {m_month} проведено / {_fmt1(pen_month)}% проникновение кросс-продаж")
-		lines.append(f"4. RR месяца по кросс-продажам: {rr} прогноз факта / {rr_pct}% прогноз выполнения 📈")
+		lines.append(f"- встречи: {m_month} / проникновение {_fmt1(pen_month)}% (цель {pen_target}%)")
+		lines.append(f"- кросс продажи: {month_total} факт")
 		lines.append(f"🥇 Топ-2 сегодня: {top_str}")
 		lines.append(f"🧱 Антилидеры: {bottom_str}")
 		await message.answer("\n".join(lines), reply_markup=main_keyboard())

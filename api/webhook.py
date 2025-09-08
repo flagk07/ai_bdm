@@ -266,4 +266,27 @@ async def diag(request: Request) -> JSONResponse:
 		last_logs = getattr(lg, "data", []) or []
 	except Exception:
 		last_logs = []
-	return JSONResponse({"ok": True, "webhook": wh, "allowed": allowed, "employee": emp, "messages_recent": msgs, "logs": last_logs}) 
+	return JSONResponse({"ok": True, "webhook": wh, "allowed": allowed, "employee": emp, "messages_recent": msgs, "logs": last_logs})
+
+
+@app.post("/api/migrate_plans_penetration")
+async def migrate_plans_penetration(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        def _do() -> int:
+            rows = db.client.table("sales_plans").select("tg_id,year,month,plan_month").execute()
+            cnt = 0
+            for r in (getattr(rows, "data", []) or []):
+                tg = int(r.get("tg_id"))
+                y = int(r.get("year"))
+                m = int(r.get("month"))
+                db.client.table("sales_plans").upsert({"tg_id": tg, "year": y, "month": m, "plan_month": 50}, on_conflict="tg_id,year,month").execute()
+                cnt += 1
+            return cnt
+        cnt = await asyncio.to_thread(_do)
+        return JSONResponse({"ok": True, "updated": cnt})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 

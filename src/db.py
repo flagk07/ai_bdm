@@ -123,7 +123,7 @@ class Database:
 			pass
 
 	# Plans API
-	def get_or_create_month_plan(self, tg_id: int, d: date, default_plan: int = 200) -> int:
+	def get_or_create_month_plan(self, tg_id: int, d: date, default_plan: int = 50) -> int:
 		year, month = d.year, d.month
 		res = self.client.table("sales_plans").select("plan_month").eq("tg_id", tg_id).eq("year", year).eq("month", month).maybe_single().execute()
 		row = getattr(res, "data", None)
@@ -133,19 +133,11 @@ class Database:
 		return default_plan
 
 	def compute_plan_breakdown(self, tg_id: int, d: date) -> Dict[str, Any]:
-		plan_month = self.get_or_create_month_plan(tg_id, d)
-		mw = month_workdays(d)
-		pd = int(round(plan_month / mw)) if mw > 0 else plan_month
-		# week plan = daily plan * number of workdays in this week (Mon-Fri)
-		start_week = d - timedelta(days=d.weekday())
-		end_week = start_week + timedelta(days=6)
-		week_days = count_workdays(start_week, end_week)
-		pw = pd * week_days
-		# RR = (fact per working days elapsed / elapsed_workdays) * total_workdays_month
-		elapsed = month_workdays_elapsed(d)
-		today_total, _ = self._sum_attempts_query(tg_id, d.replace(day=1), d)
-		rr = int(round((today_total / (elapsed if elapsed > 0 else 1)) * mw)) if mw > 0 else today_total
-		return {"plan_month": plan_month, "plan_day": pd, "plan_week": pw, "rr_month": rr, "workdays_month": mw, "workdays_elapsed": elapsed}
+		"""Return penetration target percent for the period.
+		- sales_plans.plan_month stores target penetration percent (default 50)
+		"""
+		target_pct = self.get_or_create_month_plan(tg_id, d, default_plan=50)
+		return {"penetration_target_pct": int(target_pct)}
 
 	def stats_period(self, tg_id: int, start: date, end: date) -> Dict[str, Any]:
 		total, by_product = self._sum_attempts_query(tg_id, start, end)

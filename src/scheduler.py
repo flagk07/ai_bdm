@@ -257,19 +257,21 @@ class StatsScheduler:
 			# RR month
 			lines.append(f"- RR месяца: прогноз факта {rr} / {rr_pct}% прогноз выполнения")
 			text = header + "\n".join(lines) + "\n"
-			# AUTO_SUMMARY: build policy + STATS_JSON and get AI conclusions
-			# Targets to reach monthly plan using remaining working days of the month
-			last_day_month = (start_month.replace(day=28) + timedelta(days=10)).replace(day=1) - timedelta(days=1)
-			remain_wd = max(count_workdays(today + timedelta(days=1), last_day_month), 0)
-			gap_total = max(p_month - month_total, 0)
-			need_per_day = int((gap_total + max(remain_wd, 1) - 1) // max(remain_wd, 1)) if remain_wd > 0 else gap_total
-			need_per_week = need_per_day * 5
+			# AUTO_SUMMARY: build policy + STATS_JSON and get AI conclusions (penetration target)
+			pen_target = int(self.db.compute_plan_breakdown(tg, today).get('penetration_target_pct', 50))
+			# current penetration
+			pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
+			pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
+			pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
+			# For targets, we do not propose increasing meetings count; focus on conversion
+			gap_pen_month = max(pen_target - int(round(pen_month)), 0)
+			gap_pen_week = max(pen_target - int(round(pen_week)), 0)
 			payload = {
 				"period": {"label": "Месяц", "start": start_month.isoformat(), "end": today.isoformat()},
 				"current": {
-					"day":   {"fact": today_total,  "plan": p_day,   "done_pct": int(round(c_day)),   "meet": m_day,   "penetration_pct": int(round(pen_day))},
-					"week":  {"fact": week_total,  "plan": p_week,  "done_pct": int(round(c_week)),  "meet": m_week,  "penetration_pct": int(round(pen_week))},
-					"month": {"fact": month_total, "plan": p_month, "done_pct": int(round(c_month)), "meet": m_month, "penetration_pct": int(round(pen_month)), "rr": rr, "rr_pct": rr_pct},
+					"day":   {"cross_fact": today_total,  "meet": m_day,   "penetration_pct": int(round(pen_day))},
+					"week":  {"cross_fact": week_total,  "meet": m_week,  "penetration_pct": int(round(pen_week))},
+					"month": {"cross_fact": month_total, "meet": m_month, "penetration_pct": int(round(pen_month))},
 				},
 				"previous": {
 					"day":   {"fact": prev_day_total},
@@ -277,10 +279,9 @@ class StatsScheduler:
 					"month": {"fact": prev_month_total},
 				},
 				"targets": {
-					"gap_total": gap_total,
-					"remaining_workdays": remain_wd,
-					"need_per_day": need_per_day,
-					"need_per_week": need_per_week
+					"penetration_target_pct": pen_target,
+					"gap_penetration_month_pct": gap_pen_month,
+					"gap_penetration_week_pct": gap_pen_week
 				}
 			}
 			policy = (
@@ -288,7 +289,7 @@ class StatsScheduler:
 				"Задача\n- Оценка результатов из STATS_JSON\n- Формирование выводов и рекомендаций на основании оцененных результатов\n\n"
 				"Правила\n- Числа разрешено брать ТОЛЬКО из STATS_JSON. Ничего не придумывай и не изменяй\n- Остальные правила из системного промпта\n\n"
 				"Формат ответа\n1. Выводы по текущим результатам\n<сгенерированный ответ выводов о работе на основании результатов>\n"
-				"2. Рекомендации и цели\n<сгенерированный ответ с рекомендациями и целями по повышению эффективности работы на основании результатов и выводов. Укажи конкретику из targets: нужно need_per_day в день (≈ need_per_week в неделю) до конца месяца>\n"
+				"2. Рекомендации и цели\n<сфокусируйся на повышении конверсии кросс-продаж (проникновение), не предлагай увеличивать количество встреч. Ориентируйся на цель penetration_target_pct и текущую penetration_pct.>\n"
 			)
 			ai_prompt = (
 				policy + "\n[STATS_JSON]\n" + json.dumps(payload, ensure_ascii=False)
