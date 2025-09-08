@@ -256,55 +256,7 @@ class StatsScheduler:
 			# RR month
 			lines.append(f"- RR месяца: прогноз факта {rr} / {rr_pct}% прогноз выполнения")
 			text = header + "\n".join(lines) + "\n"
-			# Choose comment source: AI if enabled, else deterministic
-			if self._env_on(os.environ.get("AI_SUMMARY")):
-				stats_dwm = self.db.stats_day_week_month(tg, today)
-				month_rank = self.db.month_ranking(start_month, end_month)
-				# Previous period meetings and penetration
-				m_prev_day = self.db.meets_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
-				m_prev_week = self.db.meets_period_count(tg, start_prev_w, end_prev_w)
-				m_prev_month = self.db.meets_period_count(tg, start_prev_m, end_prev_m)
-				linked_prev_day = self.db.attempts_linked_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
-				linked_prev_week = self.db.attempts_linked_period_count(tg, start_prev_w, end_prev_w)
-				linked_prev_month = self.db.attempts_linked_period_count(tg, start_prev_m, end_prev_m)
-				pen_prev_day = (linked_prev_day * 100 / m_prev_day) if m_prev_day > 0 else 0
-				pen_prev_week = (linked_prev_week * 100 / m_prev_week) if m_prev_week > 0 else 0
-				pen_prev_month = (linked_prev_month * 100 / m_prev_month) if m_prev_month > 0 else 0
-				# Find previous auto-summary text if any
-				prev_auto_text = None
-				try:
-					hist = self.db.get_assistant_messages(tg, limit=10)
-					for m in reversed(hist):
-						if m.get("auto") and m.get("role") == "assistant":
-							prev_auto_text = m.get("content_sanitized")
-							break
-				except Exception:
-					prev_auto_text = None
-				ai_prompt = (
-					"[auto_summary] Строгий формат. Каждый пункт — с новой строки. Запрещено выводить блок статистики (Период/Итого/По продуктам/Лидеры). "
-					"Не сравнивай встречи с планом (план только для кроссов).\n"
-					"1) Анализ текущих количественных результатов (встречи, кроссы, выполнение, проникновение).\n"
-					"2) Анализ предыдущих количественных результатов (вчера/пред. неделя/пред. месяц).\n"
-					"3) Оценка влияния прошлых рекомендаций/заметок/диалогов на текущие цифры (кратко).\n"
-					"4) SMART-цели и конкретные шаги (1–3 пункта). Без воды и без повторения цифр из сводки.\n"
-					"Не используй ссылки/метки. Стиль: деловой; пункты 1), 2), 3), 4); подпункты начинай с '- '; без эмодзи и жирного; максимум 6–10 коротких строк.\n"
-					"Данные для анализа (контекст):\n"
-					f"Текущие: день факт {today_total}, план {p_day}, вып. {self._fmt1(c_day)}%, проникн. {self._fmt1(pen_day)}%; "
-					f"неделя факт {week_total}, план {p_week}, вып. {self._fmt1(c_week)}%, проникн. {self._fmt1(pen_week)}%; "
-					f"месяц факт {month_total}, план {p_month}, вып. {self._fmt1(c_month)}%, проникн. {self._fmt1(pen_month)}%; RR {rr}.\n"
-					f"Предыдущие: день факт {prev_day_total}, проникн. {self._fmt1(pen_prev_day)}%; "
-					f"неделя факт {prev_week_total}, проникн. {self._fmt1(pen_prev_week)}%; "
-					f"месяц факт {prev_month_total}, проникн. {self._fmt1(pen_prev_month)}%.\n"
-					f"Прошлая авто-сводка: {prev_auto_text or '—' }\n"
-				)
-				comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, ai_prompt)
-				text += self._shape_ai_comment(comment) + "\n"
-			else:
-				coach = self._coach_lines(today_by or {}, d_day, d_week, d_month)
-				# normalize numbering to 1), 2)
-				coach = [re.sub(r"^(\d+)\.\s+", r"\1) ", ln) for ln in coach]
-				text += "\n".join(coach) + "\n"
-			text += "Обсудить с помощником: /assistant"
+			# Only server numeric summary (no AI conclusions)
 			# Store auto-sent summary in assistant_messages (auto=true)
 			try:
 				self.db.add_assistant_message(tg, "assistant", text, off_topic=False, auto=True)
