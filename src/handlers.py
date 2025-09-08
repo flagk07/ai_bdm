@@ -43,7 +43,7 @@ class MeetSession:
 
 def main_keyboard() -> ReplyKeyboardMarkup:
 	return ReplyKeyboardMarkup(keyboard=[
-		[KeyboardButton(text="Внести кросс"), KeyboardButton(text="Статистика")],
+		[KeyboardButton(text="Статистика")],
 		[KeyboardButton(text="Внести встречу"), KeyboardButton(text="Заметки")],
 		[KeyboardButton(text="Помощник")],
 	], resize_keyboard=True)
