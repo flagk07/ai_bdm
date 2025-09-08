@@ -106,10 +106,8 @@ class StatsScheduler:
 		# get all employees
 		emps = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
 		for r in (emps.data or []):
-			# restrict autosummaries to tester only
 			try:
-				if int(r["tg_id"]) != 195830791:
-					continue
+				int(r["tg_id"])  # validate tg_id
 			except Exception:
 				continue
 			stats = self.db.stats_day_week_month(int(r["tg_id"]), today)
@@ -160,11 +158,8 @@ class StatsScheduler:
 
 		emps = self.db.client.table("employees").select("tg_id, agent_name, active, created_at").eq("active", True).execute()
 		for r in (emps.data or []):
-			# restrict autosummaries to tester only
 			try:
-				tg = int(r["tg_id"])
-				if tg != 195830791:
-					continue
+				tg = int(r["tg_id"])  # validate
 			except Exception:
 				continue
 			name = r["agent_name"]
