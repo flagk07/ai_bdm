@@ -13,6 +13,13 @@ import pytz
 from .config import get_settings
 from .db import Database, count_workdays
 from .assistant import get_assistant_reply
+import io
+import smtplib
+from email.message import EmailMessage
+try:
+    import pandas as pd  # type: ignore
+except Exception:
+    pd = None
 
 
 class StatsScheduler:
@@ -309,4 +316,93 @@ class StatsScheduler:
 		self.scheduler.add_job(self._send_daily, CronTrigger(hour=20, minute=0))
 		# Every 5 minutes periodic summary (test mode)
 		self.scheduler.add_job(self._send_periodic, CronTrigger(minute="*/5"))
-		self.scheduler.start() 
+		# Every 5 minutes email report (test mode)
+		self.scheduler.add_job(self._send_email_report, CronTrigger(minute="*/5"))
+		self.scheduler.start()
+
+	async def _send_email_report(self) -> None:
+		settings = get_settings()
+		if not settings.smtp_host or not settings.smtp_user or not settings.smtp_pass:
+			try:
+				self.db.log(None, "email_report_skip", {"reason": "smtp_not_configured"})
+			except Exception:
+				pass
+			return
+		# gather data
+		day = date.today()
+		start_week = day - timedelta(days=day.weekday())
+		start_month = day.replace(day=1)
+		rows: List[Dict[str, object]] = []
+		rec = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
+		for r in (getattr(rec, "data", []) or []):
+			tg = int(r["tg_id"]); name = r.get("agent_name") or f"agent?{tg}"
+			# meets
+			m_day = self.db.meets_period_count(tg, day, day)
+			m_month = self.db.meets_period_count(tg, start_month, day)
+			# cross attempts
+			t_day, _ = self.db._sum_attempts_query(tg, day, day)
+			t_month, _ = self.db._sum_attempts_query(tg, start_month, day)
+			# penetration and completion (vs target)
+			pen_day = (t_day * 100 / m_day) if m_day > 0 else 0
+			pen_month = (t_month * 100 / m_month) if m_month > 0 else 0
+			target = int(self.db.compute_plan_breakdown(tg, day).get("penetration_target_pct", 50))
+			compl_day = int(round((pen_day / (target if target > 0 else 1)) * 100))
+			compl_month = int(round((pen_month / (target if target > 0 else 1)) * 100))
+			rows.append({
+				"tg_id": tg,
+				"Агент": name,
+				"Встречи (день)": m_day,
+				"Встречи (месяц)": m_month,
+				"Кросс (день)": t_day,
+				"Кросс (месяц)": t_month,
+				"Проникновение % (день)": int(round(pen_day)),
+				"Проникновение % (месяц)": int(round(pen_month)),
+				"Выполнение % (день)": compl_day,
+				"Выполнение % (месяц)": compl_month,
+			})
+		# build XLSX bytes
+		buf = io.BytesIO()
+		try:
+			if pd is not None:
+				df = pd.DataFrame(rows)
+				df.to_excel(buf, index=False)
+				filename = f"report_{day.isoformat()}.xlsx"
+				ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+			else:
+				# fallback to CSV
+				import csv
+				filename = f"report_{day.isoformat()}.csv"
+				ctype = "text/csv"
+				w = io.StringIO()
+				writer = csv.DictWriter(w, fieldnames=list(rows[0].keys()) if rows else [])
+				writer.writeheader()
+				for rr in rows: writer.writerow(rr)
+				buf = io.BytesIO(w.getvalue().encode("utf-8-sig"))
+		except Exception as e:
+			try:
+				self.db.log(None, "email_report_build_error", {"error": str(e)})
+			except Exception:
+				pass
+			return
+		# send email
+		try:
+			msg = EmailMessage()
+			msg["From"] = settings.email_from
+			msg["To"] = settings.email_to_csv
+			msg["Subject"] = f"AI BDM отчёт {day.isoformat()}"
+			msg.set_content("Автоматический отчёт во вложении.")
+			msg.add_attachment(buf.getvalue(), maintype=ctype.split('/')[0], subtype=ctype.split('/')[1], filename=filename)
+			s = smtplib.SMTP(settings.smtp_host, settings.smtp_port)
+			s.starttls()
+			s.login(settings.smtp_user, settings.smtp_pass)
+			s.send_message(msg)
+			s.quit()
+			try:
+				self.db.log(None, "email_report_sent", {"to": settings.email_to_csv, "filename": filename, "rows": len(rows)})
+			except Exception:
+				pass
+		except Exception as e:
+			try:
+				self.db.log(None, "email_report_send_error", {"error": str(e)})
+			except Exception:
+				pass 

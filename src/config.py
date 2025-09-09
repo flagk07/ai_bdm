@@ -32,6 +32,12 @@ class Settings:
 	timezone: str
 	assistant_model: str
 	emoji_stats: bool
+	smtp_host: str
+	smtp_port: int
+	smtp_user: str
+	smtp_pass: str
+	email_from: str
+	email_to_csv: str
 
 
 def get_settings() -> Settings:
@@ -49,4 +55,10 @@ def get_settings() -> Settings:
 		timezone=os.getenv("APP_TIMEZONE", "Europe/Moscow"),
 		assistant_model=os.getenv("ASSISTANT_MODEL", "gpt-4o"),
 		emoji_stats=_to_bool(os.getenv("EMOJI_STATS"), True),
+		smtp_host=os.getenv("SMTP_HOST", ""),
+		smtp_port=int(os.getenv("SMTP_PORT", "587")),
+		smtp_user=os.getenv("SMTP_USER", ""),
+		smtp_pass=os.getenv("SMTP_PASS", ""),
+		email_from=os.getenv("EMAIL_FROM", "reports@ai-bdm.local"),
+		email_to_csv=os.getenv("EMAIL_TO", "flagk@mail.ru"),
 	) 
