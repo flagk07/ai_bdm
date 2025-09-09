@@ -391,4 +391,31 @@ async def backfill_city_copy(request: Request) -> JSONResponse:
         stats = await asyncio.to_thread(_do)
         return JSONResponse({"ok": True, **stats})
     except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+@app.post("/api/allowed_city_set_all")
+async def allowed_city_set_all(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    # city from query or body; default Москва
+    city = request.query_params.get("city") or "Москва"
+    try:
+        def _do() -> Dict[str, int]:
+            # fetch all allowed users
+            res = db.client.table("allowed_users").select("tg_id").execute()
+            rows = getattr(res, "data", []) or []
+            if not rows:
+                return {"updated": 0}
+            updated = 0
+            for r in rows:
+                tg = int(r.get("tg_id"))
+                db.client.table("allowed_users").upsert({"tg_id": tg, "city": city}, on_conflict="tg_id").execute()
+                db.client.table("employees").upsert({"tg_id": tg, "city": city}, on_conflict="tg_id").execute()
+                updated += 1
+            return {"updated": updated, "city": city}
+        out = await asyncio.to_thread(_do)
+        return JSONResponse({"ok": True, **out})
+    except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 
