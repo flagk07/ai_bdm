@@ -206,7 +206,6 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 				await call.message.answer("Ошибка сохранения. Повторите позже.")
 		finally:
 			await state.clear()
-			await call.message.answer("Меню", reply_markup=main_keyboard())
 			await call.answer()
 
 	# Meet flow
