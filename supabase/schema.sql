@@ -8,6 +8,9 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS employees (
   tg_id       bigint PRIMARY KEY,
   agent_name  text,
+  city        text,
+  timezone    text NOT NULL DEFAULT 'Europe/Moscow',
+  autosum_enabled boolean NOT NULL DEFAULT true,
   active      boolean NOT NULL DEFAULT true,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -15,6 +18,7 @@ CREATE TABLE IF NOT EXISTS employees (
 -- allowed_users
 CREATE TABLE IF NOT EXISTS allowed_users (
   tg_id      bigint PRIMARY KEY,
+  city       text,
   active     boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now()
 );

@@ -15,6 +15,8 @@ from src.handlers import register_handlers
 from src.scheduler import StatsScheduler
 # from src.rag import ingest_kn_docs, ingest_deposit_docs  # removed
 from src.assistant import get_assistant_reply
+import re
+from typing import Dict
 
 app = FastAPI()
 
@@ -163,14 +165,27 @@ async def add_allowed(request: Request) -> JSONResponse:
 		return JSONResponse({"ok": False, "error": "invalid tg_id"}, status_code=400)
 	# Upsert into allowed_users and pre-create employee row (idempotent)
 	try:
+		city = request.query_params.get("city")
+		if not city:
+			try:
+				payload = await request.json()
+				city = (payload.get("city") or "").strip() if isinstance(payload, dict) else None
+			except Exception:
+				city = None
 		def _do() -> None:
-			db.client.table("allowed_users").upsert({"tg_id": tg_id, "active": True}, on_conflict="tg_id").execute()
-			# Optional: ensure employees row exists so /start proceeds smoothly
-			db.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").execute()
+			row = {"tg_id": tg_id, "active": True}
+			if city:
+				row["city"] = city
+			db.client.table("allowed_users").upsert(row, on_conflict="tg_id").execute()
+			# Ensure employees row exists and carry city through
+			emp = {"tg_id": tg_id}
+			if city:
+				emp["city"] = city
+			db.client.table("employees").upsert(emp, on_conflict="tg_id").execute()
 		async def _run():
 			await asyncio.to_thread(_do)
 		await _run()
-		return JSONResponse({"ok": True, "tg_id": tg_id})
+		return JSONResponse({"ok": True, "tg_id": tg_id, "city": city})
 	except Exception as e:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
@@ -288,5 +303,66 @@ async def migrate_plans_penetration(request: Request) -> JSONResponse:
             return cnt
         cnt = await asyncio.to_thread(_do)
         return JSONResponse({"ok": True, "updated": cnt})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+def _city_to_tz(city: str | None) -> str | None:
+    if not city:
+        return None
+    key = re.sub(r"\s+", " ", city.strip().lower())
+    MAP = {
+        "воронеж": "Europe/Moscow",
+        "барнаул": "Asia/Barnaul",
+        "иркутск": "Asia/Irkutsk",
+        "калининград": "Europe/Kaliningrad",
+        "кострома": "Europe/Moscow",
+        "красноярск": "Asia/Krasnoyarsk",
+        "кудрово": "Europe/Moscow",
+        "екатеринбург": "Asia/Yekaterinburg",
+        "москва": "Europe/Moscow",
+        "нижневартовск": "Asia/Yekaterinburg",
+        "омск": "Asia/Omsk",
+        "оренбург": "Asia/Yekaterinburg",
+        "казань": "Europe/Moscow",
+        "ростов-на-дону": "Europe/Moscow",
+        "набережные челны": "Europe/Moscow",
+        "новосибирск": "Asia/Novosibirsk",
+        "самара": "Europe/Samara",
+        "санкт-петербург": "Europe/Moscow",
+        "саратов": "Europe/Saratov" if False else "Europe/Samara",
+        "псков": "Europe/Moscow",
+        "тверь": "Europe/Moscow",
+        "сургут": "Asia/Yekaterinburg",
+        "тюмень": "Asia/Yekaterinburg",
+        "улан-удэ": "Asia/Irkutsk",
+        "хабаровск": "Asia/Vladivostok",
+        "южно-сахалинск": "Asia/Sakhalin",
+        "челябинск": "Asia/Yekaterinburg",
+        "якутск": "Asia/Yakutsk",
+        "мурманск": "Europe/Moscow",
+        "владивосток": "Asia/Vladivostok",
+    }
+    return MAP.get(key)
+
+@app.post("/api/backfill_city_timezone")
+async def backfill_city_timezone(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        def _do() -> Dict[str, int]:
+            res = db.client.table("employees").select("tg_id, city, timezone").execute()
+            upd = 0
+            for r in (getattr(res, "data", []) or []):
+                if r.get("timezone") and r.get("timezone") != "Europe/Moscow":
+                    continue
+                tz = _city_to_tz(r.get("city"))
+                if tz:
+                    db.client.table("employees").upsert({"tg_id": r["tg_id"], "timezone": tz}, on_conflict="tg_id").execute()
+                    upd += 1
+            return {"updated": upd}
+        stats = await asyncio.to_thread(_do)
+        return JSONResponse({"ok": True, **stats})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 
