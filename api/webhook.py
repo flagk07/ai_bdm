@@ -365,4 +365,30 @@ async def backfill_city_timezone(request: Request) -> JSONResponse:
         stats = await asyncio.to_thread(_do)
         return JSONResponse({"ok": True, **stats})
     except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+@app.post("/api/backfill_city_copy")
+async def backfill_city_copy(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        def _do() -> Dict[str, int]:
+            rows = db.client.table("allowed_users").select("tg_id, city").execute()
+            copied = 0
+            for r in (getattr(rows, "data", []) or []):
+                city = (r.get("city") or "").strip()
+                if not city:
+                    continue
+                # only set if employees.city is null or empty
+                emp = db.client.table("employees").select("city").eq("tg_id", r["tg_id"]).maybe_single().execute()
+                curr = (getattr(emp, "data", {}) or {}).get("city") if hasattr(emp, "data") else None
+                if not curr:
+                    db.client.table("employees").upsert({"tg_id": r["tg_id"], "city": city}, on_conflict="tg_id").execute()
+                    copied += 1
+            return {"copied": copied}
+        stats = await asyncio.to_thread(_do)
+        return JSONResponse({"ok": True, **stats})
+    except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 
