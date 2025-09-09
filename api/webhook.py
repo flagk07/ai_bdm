@@ -181,6 +181,10 @@ async def add_allowed(request: Request) -> JSONResponse:
 			emp = {"tg_id": tg_id}
 			if city:
 				emp["city"] = city
+				# if we can derive timezone now — set it
+				tz = _city_to_tz(city)
+				if tz:
+					emp["timezone"] = tz
 			db.client.table("employees").upsert(emp, on_conflict="tg_id").execute()
 		async def _run():
 			await asyncio.to_thread(_do)
