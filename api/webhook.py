@@ -437,4 +437,43 @@ async def send_report_now(request: Request) -> JSONResponse:
         await sch._send_email_report()
         return JSONResponse({"ok": True})
     except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+@app.post("/api/set_smtp")
+async def set_smtp(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        payload = {}
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception:
+            payload = {}
+        def _get(key: str, default: str = "") -> str:
+            return (request.query_params.get(key) or str(payload.get(key) or default)).strip()
+        # read values
+        host = _get("SMTP_HOST")
+        port = _get("SMTP_PORT")
+        ssl = _get("SMTP_SSL")
+        user = _get("SMTP_USER")
+        pwd  = _get("SMTP_PASS")
+        frm  = _get("EMAIL_FROM")
+        to   = _get("EMAIL_TO")
+        if host: os.environ["SMTP_HOST"] = host
+        if port: os.environ["SMTP_PORT"] = port
+        if ssl:  os.environ["SMTP_SSL"] = ssl
+        if user: os.environ["SMTP_USER"] = user
+        if pwd:  os.environ["SMTP_PASS"] = pwd
+        if frm:  os.environ["EMAIL_FROM"] = frm
+        if to:   os.environ["EMAIL_TO"] = to
+        try:
+            db.log(None, "set_smtp_runtime", {"host": host, "port": port, "ssl": ssl, "from": frm, "to": to and "masked"})
+        except Exception:
+            pass
+        return JSONResponse({"ok": True, "applied": {"SMTP_HOST": host, "SMTP_PORT": port, "SMTP_SSL": ssl, "EMAIL_FROM": frm, "EMAIL_TO": to}})
+    except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 
