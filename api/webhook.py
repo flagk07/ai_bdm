@@ -91,7 +91,12 @@ async def _set_commands() -> None:
 	if not _env_off(os.environ.get("NOTIFY_ENABLED")):
 		async def push(chat_id: int, text: str) -> None:
 			await bot.send_message(chat_id, text)
-		StatsScheduler(db, push).start()
+		app.state.scheduler = StatsScheduler(db, push)
+		app.state.scheduler.start()
+		try:
+			db.log(None, "scheduler_start", {"ok": True})
+		except Exception:
+			pass
 
 
 @app.get("/")
