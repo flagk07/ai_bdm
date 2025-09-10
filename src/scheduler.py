@@ -392,8 +392,11 @@ class StatsScheduler:
 			msg["Subject"] = f"AI BDM отчёт {day.isoformat()}"
 			msg.set_content("Автоматический отчёт во вложении.")
 			msg.add_attachment(buf.getvalue(), maintype=ctype.split('/')[0], subtype=ctype.split('/')[1], filename=filename)
-			s = smtplib.SMTP(settings.smtp_host, settings.smtp_port)
-			s.starttls()
+			if getattr(settings, "smtp_ssl", False):
+				s = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port)
+			else:
+				s = smtplib.SMTP(settings.smtp_host, settings.smtp_port)
+				s.starttls()
 			s.login(settings.smtp_user, settings.smtp_pass)
 			s.send_message(msg)
 			s.quit()

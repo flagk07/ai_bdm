@@ -34,6 +34,7 @@ class Settings:
 	emoji_stats: bool
 	smtp_host: str
 	smtp_port: int
+	smtp_ssl: bool
 	smtp_user: str
 	smtp_pass: str
 	email_from: str
@@ -57,6 +58,7 @@ def get_settings() -> Settings:
 		emoji_stats=_to_bool(os.getenv("EMOJI_STATS"), True),
 		smtp_host=os.getenv("SMTP_HOST", ""),
 		smtp_port=int(os.getenv("SMTP_PORT", "587")),
+		smtp_ssl=_to_bool(os.getenv("SMTP_SSL"), False) or os.getenv("SMTP_PORT", "") == "465",
 		smtp_user=os.getenv("SMTP_USER", ""),
 		smtp_pass=os.getenv("SMTP_PASS", ""),
 		email_from=os.getenv("EMAIL_FROM", "reports@ai-bdm.local"),
