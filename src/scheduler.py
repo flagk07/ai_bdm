@@ -328,6 +328,13 @@ class StatsScheduler:
 			except Exception:
 				pass
 			return
+		# ensure recipient is set
+		if not getattr(settings, "email_to_csv", ""):
+			try:
+				self.db.log(None, "email_report_skip", {"reason": "recipient_not_set"})
+			except Exception:
+				pass
+			return
 		# gather data
 		day = date.today()
 		start_week = day - timedelta(days=day.weekday())

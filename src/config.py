@@ -62,5 +62,5 @@ def get_settings() -> Settings:
 		smtp_user=os.getenv("SMTP_USER", ""),
 		smtp_pass=os.getenv("SMTP_PASS", ""),
 		email_from=os.getenv("EMAIL_FROM", "reports@ai-bdm.local"),
-		email_to_csv=os.getenv("EMAIL_TO", "flagk@mail.ru"),
+		email_to_csv=os.getenv("EMAIL_TO", ""),
 	) 
