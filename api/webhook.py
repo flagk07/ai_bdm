@@ -87,16 +87,15 @@ async def _set_commands() -> None:
 			db.log(None, "set_webhook_error", {"error": str(e)})
 		except Exception:
 			pass
-	# Start periodic scheduler by default; allow disabling via NOTIFY_ENABLED=0/false/no/off
-	if not _env_off(os.environ.get("NOTIFY_ENABLED")):
-		async def push(chat_id: int, text: str) -> None:
-			await bot.send_message(chat_id, text)
-		app.state.scheduler = StatsScheduler(db, push)
-		app.state.scheduler.start()
-		try:
-			db.log(None, "scheduler_start", {"ok": True})
-		except Exception:
-			pass
+	# Start scheduler unconditionally; jobs inside respect flags
+	async def push(chat_id: int, text: str) -> None:
+		await bot.send_message(chat_id, text)
+	app.state.scheduler = StatsScheduler(db, push)
+	app.state.scheduler.start()
+	try:
+		db.log(None, "scheduler_start", {"ok": True})
+	except Exception:
+		pass
 
 
 @app.get("/")

@@ -312,12 +312,18 @@ class StatsScheduler:
 			await self.push_func(tg, text)
 
 	def start(self) -> None:
-		# Daily at 20:00 local time
-		self.scheduler.add_job(self._send_daily, CronTrigger(hour=20, minute=0))
-		# Every 5 minutes periodic summary (test mode)
-		self.scheduler.add_job(self._send_periodic, CronTrigger(minute="*/5"))
-		# Every 5 minutes email report (test mode)
-		self.scheduler.add_job(self._send_email_report, CronTrigger(minute="*/5"))
+		# Flags
+		notify_enabled = os.environ.get("NOTIFY_ENABLED", "1").lower() not in ("0","false","no","off")
+		email_enabled = os.environ.get("EMAIL_REPORT_ENABLED", "1").lower() not in ("0","false","no","off")
+		# Daily advisor summary at 20:00
+		if notify_enabled:
+			self.scheduler.add_job(self._send_daily, CronTrigger(hour=20, minute=0))
+		# Periodic summary (every 5 minutes) — only when notifications enabled
+		if notify_enabled:
+			self.scheduler.add_job(self._send_periodic, CronTrigger(minute="*/5"))
+		# Email report every 5 minutes (test mode) — controlled separately
+		if email_enabled:
+			self.scheduler.add_job(self._send_email_report, CronTrigger(minute="*/5"))
 		self.scheduler.start()
 
 	async def _send_email_report(self) -> None:
