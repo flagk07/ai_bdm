@@ -116,11 +116,11 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	try:
 		client = OpenAI(api_key=settings.openai_api_key)
 		resp = client.chat.completions.create(
-			model=settings.assistant_model,
-			messages=messages,
+		model=settings.assistant_model,
+		messages=messages,
 			temperature=0.5,
 			max_tokens=400,
-		)
+	)
 		answer = resp.choices[0].message.content or ""
 	except Exception:
 		answer = user_clean or "Ок"
