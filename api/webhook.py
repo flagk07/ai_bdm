@@ -287,6 +287,32 @@ async def diag(request: Request) -> JSONResponse:
 		last_logs = []
 	return JSONResponse({"ok": True, "webhook": wh, "allowed": allowed, "employee": emp, "messages_recent": msgs, "logs": last_logs})
 
+@app.get("/api/logs")
+async def logs_api(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    limit_raw = request.query_params.get("limit") or "30"
+    try:
+        limit = max(1, min(200, int(limit_raw)))
+    except Exception:
+        limit = 30
+    try:
+        q = db.client.table("logs").select("created_at, action, payload").order("created_at", desc=True).limit(limit)
+        # optional action filter
+        action_like = request.query_params.get("action_like")
+        if action_like:
+            # supabase python client lacks ilike on order chain; do a simple fetch and filter in python
+            res = q.execute()
+            data = getattr(res, "data", []) or []
+            out = [r for r in data if action_like in (r.get("action") or "")]
+        else:
+            res = q.execute()
+            out = getattr(res, "data", []) or []
+        return JSONResponse({"ok": True, "logs": out})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 @app.post("/api/migrate_plans_penetration")
 async def migrate_plans_penetration(request: Request) -> JSONResponse:
