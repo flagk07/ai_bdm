@@ -507,4 +507,55 @@ async def set_smtp(request: Request) -> JSONResponse:
             pass
         return JSONResponse({"ok": True, "applied": {"SMTP_HOST": host, "SMTP_PORT": port, "SMTP_SSL": ssl, "EMAIL_FROM": frm, "EMAIL_TO": to}})
     except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+@app.get("/api/scheduler_status")
+async def scheduler_status(request: Request) -> JSONResponse:
+	# Protected
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	try:
+		sch = getattr(app.state, "scheduler", None)
+		status = "missing" if sch is None else "present"
+		jobs = []
+		try:
+			if sch is not None:
+				jobs = [str(j.id) for j in sch.scheduler.get_jobs()] if hasattr(sch, "scheduler") else []
+		except Exception:
+			jobs = []
+		return JSONResponse({"ok": True, "status": status, "jobs": jobs})
+	except Exception as e:
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/scheduler_start")
+async def scheduler_start(request: Request) -> JSONResponse:
+	# Protected
+	expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+	token = request.query_params.get("token")
+	if expected and token != expected:
+		return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+	try:
+		async def push(chat_id: int, text: str) -> None:
+			await bot.send_message(chat_id, text)
+		sch = getattr(app.state, "scheduler", None)
+		if sch is None:
+			app.state.scheduler = StatsScheduler(db, push)
+			app.state.scheduler.start()
+			try:
+				db.log(None, "scheduler_start", {"ok": True, "manual": True})
+			except Exception:
+				pass
+			return JSONResponse({"ok": True, "started": True})
+		else:
+			# Already present; try ensure started
+			try:
+				app.state.scheduler.scheduler.start()
+				db.log(None, "scheduler_start", {"ok": True, "manual": True, "already": True})
+			except Exception:
+				pass
+			return JSONResponse({"ok": True, "started": False, "already_present": True})
+	except Exception as e:
+		return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 
