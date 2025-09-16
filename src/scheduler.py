@@ -320,10 +320,10 @@ class StatsScheduler:
 			self.scheduler.add_job(self._send_daily, CronTrigger(hour=20, minute=0))
 		# Periodic summary (every 5 minutes) — only when notifications enabled
 		if notify_enabled:
-			self.scheduler.add_job(self._send_periodic, CronTrigger(minute="*/5"))
+			self.scheduler.add_job(self._send_periodic, CronTrigger(minute="*/120"))
 		# Email report every 5 minutes (test mode) — controlled separately
 		if email_enabled:
-			self.scheduler.add_job(self._send_email_report, CronTrigger(minute="*/5"))
+			self.scheduler.add_job(self._send_email_report, CronTrigger(minute="*/30"))
 		self.scheduler.start()
 
 	async def _send_email_report(self) -> None:
