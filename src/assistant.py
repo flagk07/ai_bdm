@@ -114,22 +114,22 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	messages.append({"role": "user", "content": user_clean})
 	answer = ""
 	    try:
-                client = OpenAI(api_key=settings.openai_api_key)
-                resp = client.chat.completions.create(
-                model=settings.assistant_model,
-                messages=messages,
-                        temperature=0.5,
-                        max_tokens=400,
+            client = OpenAI(api_key=settings.openai_api_key)
+            resp = client.chat.completions.create(
+            model=settings.assistant_model,
+            messages=messages,
+                    temperature=0.5,
+                    max_tokens=400,
         )
-                answer = resp.choices[0].message.content or ""
+            answer = resp.choices[0].message.content or ""
         except Exception as exc:
-                error_text = str(exc)
-                try:
-                        db.log(tg_id, "assistant_openai_error", {"error": error_text})
-                except Exception:
-                        pass
-                print(f"assistant_openai_error: {error_text}", flush=True)
-                raise
+            error_text = str(exc)
+            try:
+                    db.log(tg_id, "assistant_openai_error", {"error": error_text})
+            except Exception:
+                    pass
+            print(f"assistant_openai_error: {error_text}", flush=True)
+            raise
 	answer_clean = sanitize_text_assistant_output(answer)
 	answer_clean = _normalize_output(answer_clean)
 	try:
