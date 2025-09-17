@@ -113,16 +113,16 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# Append current user message
 	messages.append({"role": "user", "content": user_clean})
 	answer = ""
-	    try:
-            client = OpenAI(api_key=settings.openai_api_key)
-            resp = client.chat.completions.create(
-            model=settings.assistant_model,
-            messages=messages,
-                    temperature=0.5,
-                    max_tokens=400,
-        )
-            answer = resp.choices[0].message.content or ""
-        except Exception as exc:
+	try:
+        client = OpenAI(api_key=settings.openai_api_key)
+        resp = client.chat.completions.create(
+        model=settings.assistant_model,
+        messages=messages,
+            temperature=0.5,
+            max_tokens=400,
+    )
+        answer = resp.choices[0].message.content or ""
+    except Exception as exc:
             error_text = str(exc)
             try:
                     db.log(tg_id, "assistant_openai_error", {"error": error_text})
