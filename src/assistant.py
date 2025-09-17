@@ -113,7 +113,7 @@ def get_assistant_reply(db: Database, tg_id: int, agent_name: str, user_stats: D
 	# Append current user message
 	messages.append({"role": "user", "content": user_clean})
 	answer = ""
-	 try:
+	    try:
                 client = OpenAI(api_key=settings.openai_api_key)
                 resp = client.chat.completions.create(
                 model=settings.assistant_model,
