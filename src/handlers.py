@@ -32,6 +32,12 @@ class AssistantStates(StatesGroup):
 	chatting = State()
 
 
+class MassIssueStates(StatesGroup):
+	entering = State()
+	cross_selecting = State()
+	cross_wait_count = State()
+
+
 @dataclass
 class ResultSession:
 	selected: Set[str]
@@ -51,6 +57,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
 	return ReplyKeyboardMarkup(keyboard=[
 		[KeyboardButton(text="Статистика"), KeyboardButton(text="Заметки")],
 		[KeyboardButton(text="Внести встречу"), KeyboardButton(text="Помощник")],
+		[KeyboardButton(text="Массовая выдача")],
 		[KeyboardButton(text="Завершить работу")],
 	], resize_keyboard=True)
 
@@ -133,6 +140,148 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			await message.answer("Меню", reply_markup=main_keyboard())
 		else:
 			await message.answer("Меню", reply_markup=_kb_work_open())
+
+	# ===== Массовая выдача =====
+
+	def _kb_mass_issue_post_count() -> InlineKeyboardMarkup:
+		return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Готово", callback_data="mi:done"), InlineKeyboardButton(text="Отмена", callback_data="mi:cancel"), InlineKeyboardButton(text="Внести кросс", callback_data="mi:cross")]])
+
+	def _kb_mass_cross(selected: Dict[str, int]) -> InlineKeyboardMarkup:
+		buttons: List[List[InlineKeyboardButton]] = []
+		row: List[InlineKeyboardButton] = []
+		for idx, p in enumerate(PRODUCTS):
+			c = selected.get(p, 0)
+			label = f"{p} [{c}]"
+			row.append(InlineKeyboardButton(text=label, callback_data=f"mic:set:{p}"))
+			if (idx + 1) % 2 == 0:
+				buttons.append(row); row = []
+		if row: buttons.append(row)
+		buttons.append([InlineKeyboardButton(text="Готово", callback_data="mic:done"), InlineKeyboardButton(text="Отмена", callback_data="mic:cancel")])
+		return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+	@dp.message(F.text == "Массовая выдача")
+	async def mass_issue_start(message: Message, state: FSMContext) -> None:
+		uid = message.from_user.id
+		if not db.is_allowed(uid):
+			await message.answer("Доступ ограничен."); return
+		if not db.work_is_open(uid):
+			await message.answer("Начните рабочий день, чтобы пользоваться функциями", reply_markup=_kb_work_open()); return
+		await state.set_state(MassIssueStates.entering)
+		await state.update_data(mi={"zp": 0, "cross": {}, "awaiting": None})
+		await message.answer("Введите количество выданных ЗП (число)", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="mi:cancel")]]))
+
+	@dp.message(MassIssueStates.entering)
+	async def mass_issue_set_count(message: Message, state: FSMContext) -> None:
+		text = (message.text or "").strip()
+		try:
+			n = int(text)
+			if n < 0 or n > 10000:
+				raise ValueError()
+		except Exception:
+			await message.answer("Введите целое число от 0 до 10000")
+			return
+		data = await state.get_data()
+		mi = data.get("mi", {})
+		mi["zp"] = n
+		await state.update_data(mi=mi)
+		await message.answer(f"ЗП: {n}. Что дальше?", reply_markup=_kb_mass_issue_post_count())
+
+	@dp.callback_query(F.data == "mi:cancel")
+	async def mass_issue_cancel(call: CallbackQuery, state: FSMContext) -> None:
+		await state.clear()
+		await call.message.answer("Результат не сохранен", reply_markup=main_keyboard())
+		await call.answer()
+
+	@dp.callback_query(F.data == "mi:done")
+	async def mass_issue_done(call: CallbackQuery, state: FSMContext) -> None:
+		data = await state.get_data(); mi = data.get("mi", {})
+		zp = int(mi.get("zp", 0) or 0)
+		try:
+			if zp > 0:
+				db.save_attempts(call.from_user.id, {"ЗП": zp}, date.today())
+				try:
+					db.log(call.from_user.id, "mass_issue_saved", {"zp": zp})
+				except Exception:
+					pass
+			await call.message.answer("Результат сохранен", reply_markup=main_keyboard())
+		except Exception as e:
+			db.log(call.from_user.id, "error", {"where": "mass_issue_done", "error": str(e)})
+			await call.message.answer("Ошибка сохранения. Повторите позже.", reply_markup=main_keyboard())
+		finally:
+			await state.clear(); await call.answer()
+
+	@dp.callback_query(F.data == "mi:cross")
+	async def mass_issue_to_cross(call: CallbackQuery, state: FSMContext) -> None:
+		data = await state.get_data(); mi = data.get("mi", {})
+		cross = mi.get("cross") or {}
+		await state.set_state(MassIssueStates.cross_selecting)
+		await state.update_data(mi={"zp": int(mi.get("zp", 0) or 0), "cross": cross, "awaiting": None})
+		await call.message.answer("Внесите кросс-продажи: выберите продукт, затем введите количество", reply_markup=_kb_mass_cross(cross))
+		await call.answer()
+
+	@dp.callback_query(MassIssueStates.cross_selecting, F.data.startswith("mic:set:"))
+	async def mass_cross_pick(call: CallbackQuery, state: FSMContext) -> None:
+		p = call.data.split(":",2)[2]
+		data = await state.get_data(); mi = data.get("mi", {})
+		mi["awaiting"] = p
+		await state.update_data(mi=mi)
+		await call.message.answer(f"Введите количество для {p}")
+		await state.set_state(MassIssueStates.cross_wait_count)
+		await call.answer()
+
+	@dp.message(MassIssueStates.cross_wait_count)
+	async def mass_cross_set_count(message: Message, state: FSMContext) -> None:
+		text = (message.text or "").strip()
+		try:
+			n = int(text)
+			if n < 0 or n > 10000:
+				raise ValueError()
+		except Exception:
+			await message.answer("Введите целое число от 0 до 10000")
+			return
+		data = await state.get_data(); mi = data.get("mi", {})
+		p = mi.get("awaiting")
+		if not p:
+			await message.answer("Не выбран продукт. Выберите продукт из списка.")
+			await state.set_state(MassIssueStates.cross_selecting)
+			return
+		cross = mi.get("cross") or {}
+		cross[p] = n
+		mi["cross"] = cross; mi["awaiting"] = None
+		await state.update_data(mi=mi)
+		await message.answer(f"{p}: {n}", reply_markup=_kb_mass_cross(cross))
+		await state.set_state(MassIssueStates.cross_selecting)
+
+	@dp.callback_query(MassIssueStates.cross_selecting, F.data == "mic:cancel")
+	async def mass_cross_cancel(call: CallbackQuery, state: FSMContext) -> None:
+		await state.clear()
+		await call.message.answer("Результат не сохранен", reply_markup=main_keyboard())
+		await call.answer()
+
+	@dp.callback_query(MassIssueStates.cross_selecting, F.data == "mic:done")
+	async def mass_cross_done(call: CallbackQuery, state: FSMContext) -> None:
+		data = await state.get_data(); mi = data.get("mi", {})
+		zp = int(mi.get("zp", 0) or 0); cross = mi.get("cross") or {}
+		try:
+			# save ZP if provided
+			if zp > 0:
+				db.save_attempts(call.from_user.id, {"ЗП": zp}, date.today())
+			# save cross attempts
+			if cross:
+				db.save_attempts(call.from_user.id, cross, date.today())
+				try:
+					db.log(call.from_user.id, "save_attempts", cross)
+				except Exception:
+					pass
+			await call.message.answer("Результат сохранен", reply_markup=main_keyboard())
+		except Exception as e:
+			try:
+				db.log(call.from_user.id, "error", {"where": "mass_cross_done", "error": str(e)})
+			except Exception:
+				pass
+			await call.message.answer("Ошибка сохранения. Повторите позже.", reply_markup=main_keyboard())
+		finally:
+			await state.clear(); await call.answer()
 
 	# Workday control
 	@dp.message(F.text == "Начать работу")
