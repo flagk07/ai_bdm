@@ -21,7 +21,7 @@ from .pii import sanitize_text
 from .assistant import get_assistant_reply
 from .scheduler import StatsScheduler
 
-PRODUCTS = ["КН","КСП","ПУ","ДК","ИК","ИЗП","НС","Вклад"]
+PRODUCTS = ["КН","КСП 4000+","КСП 1600","ПДС","ПУ","ДК","ИК","ИЗП","НС","Вклад"]
 
 
 class ResultStates(StatesGroup):

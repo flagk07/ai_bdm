@@ -16,7 +16,7 @@ from .db import Database
 from .pii import sanitize_text
 from .assistant import get_assistant_reply
 
-PRODUCTS: List[str] = ["КН","КСП","ПУ","ДК","ИК","ИЗП","НС","Вклад","КН к ЗП"]
+PRODUCTS: List[str] = ["КН","КСП 4000+","КСП 1600","ПДС","ПУ","ДК","ИК","ИЗП","НС","Вклад","КН к ЗП"]
 DELIVERY_PRODUCTS: List[str] = ["ЗП","ДК","МК","ПУ","КН","ТС","Вклад","ИК","Эскроу","КК","Аккредитив"]
 
 
