@@ -143,7 +143,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		db.work_open(user_id)
 		plan = db.compute_plan_breakdown(user_id, date.today())
 		pen_target = int(plan.get('penetration_target_pct', 50))
-		await message.answer(f"- цель сегодня не менее {pen_target}% проникновений кросс-продаж во встречи, у тебя все получится!", reply_markup=main_keyboard())
+		await message.answer(f"🎯 Цель на сегодня: не менее {pen_target}% проникновения кросс‑продаж во встречи. У тебя всё получится! 💪", reply_markup=main_keyboard())
 
 	@dp.message(F.text == "Завершить работу")
 	async def work_close_handler(message: Message) -> None:
