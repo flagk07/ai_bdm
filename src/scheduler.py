@@ -315,18 +315,110 @@ class StatsScheduler:
 		# Flags
 		notify_enabled = os.environ.get("NOTIFY_ENABLED", "1").lower() not in ("0","false","no","off")
 		email_enabled = os.environ.get("EMAIL_REPORT_ENABLED", "1").lower() not in ("0","false","no","off")
-		# Daily advisor summary at 20:00
+		# Auto-summary policy: once per day at 13:00 local time (if work session is open)
 		if notify_enabled:
-			self.scheduler.add_job(self._send_daily, CronTrigger(hour=20, minute=0))
-		# Periodic summary — only when notifications enabled
-		if notify_enabled:
-			self.scheduler.add_job(self._send_periodic, CronTrigger(minute="*/120"))
+			self.scheduler.add_job(self._autosum_13_worker, CronTrigger(minute="*"))
 		# Email report at 11:00 and 19:00 Moscow time
 		if email_enabled:
 			self.scheduler.add_job(self._send_email_report, CronTrigger(hour="11,19", minute=0))
 		# Auto-close workday at 21:00 local time
 		self.scheduler.add_job(self._auto_close_workday, CronTrigger(hour=21, minute=0))
 		self.scheduler.start()
+
+	async def _autosum_13_worker(self) -> None:
+		"""Every minute: for each active employee, if local time is 13:00 and work is open, send autosummary once per day."""
+		day_utc = datetime.utcnow().date()
+		try:
+			emps = self.db.list_active_employees()
+		except Exception:
+			emps = []
+		for r in (emps or []):
+			try:
+				tg = int(r.get("tg_id"))
+			except Exception:
+				continue
+			# Check session open
+			if not self.db.work_is_open(tg):
+				continue
+			# Local time check
+			tz_name = (r.get("timezone") or get_settings().timezone)
+			try:
+				tz = pytz.timezone(tz_name)
+			except Exception:
+				tz = pytz.timezone(get_settings().timezone)
+			now_local = datetime.now(tz)
+			if not (now_local.hour == 13):
+				continue
+			# Avoid duplicates: check if already sent today
+			try:
+				rec = self.db.client.table("logs").select("created_at").eq("tg_id", tg).eq("action", "autosum_13_sent").order("created_at", desc=True).limit(1).execute()
+				rows = getattr(rec, "data", []) or []
+				if rows:
+					created = rows[0].get("created_at")
+					dt = datetime.fromisoformat(str(created).replace("Z", "+00:00")).astimezone(tz)
+					if dt.date() == now_local.date():
+						continue
+			except Exception:
+				pass
+			# Build and send summary (reuse logic from _send_periodic)
+			today = now_local.date()
+			start_week = today - timedelta(days=today.weekday())
+			start_month = today.replace(day=1)
+			name = r.get("agent_name") or f"agent?{tg}"
+			# Totals
+			today_total, today_by = self.db._sum_attempts_query(tg, today, today)
+			week_total, _ = self.db._sum_attempts_query(tg, start_week, today)
+			month_total, _ = self.db._sum_attempts_query(tg, start_month, today)
+			# meetings and penetration
+			m_day = self.db.meets_period_count(tg, today, today)
+			m_week = self.db.meets_period_count(tg, start_week, today)
+			m_month = self.db.meets_period_count(tg, start_month, today)
+			linked_day = self.db.attempts_linked_period_count(tg, today, today)
+			linked_week = self.db.attempts_linked_period_count(tg, start_week, today)
+			linked_month = self.db.attempts_linked_period_count(tg, start_month, today)
+			pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
+			pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
+			pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
+			# target and deltas
+			pen_target = int(self.db.compute_plan_breakdown(tg, today).get('penetration_target_pct', 50))
+			start_prev_w = start_week - timedelta(days=7)
+			end_prev_w = start_week - timedelta(days=1)
+			m_prev_day = self.db.meets_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+			linked_prev_day = self.db.attempts_linked_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+			pen_prev_day = (linked_prev_day * 100 / m_prev_day) if m_prev_day > 0 else 0
+			m_prev_week = self.db.meets_period_count(tg, start_prev_w, end_prev_w)
+			linked_prev_week = self.db.attempts_linked_period_count(tg, start_prev_w, end_prev_w)
+			pen_prev_week = (linked_prev_week * 100 / m_prev_week) if m_prev_week > 0 else 0
+			end_prev_m = start_month - timedelta(days=1)
+			start_prev_m = end_prev_m.replace(day=1)
+			m_prev_month = self.db.meets_period_count(tg, start_prev_m, end_prev_m)
+			linked_prev_month = self.db.attempts_linked_period_count(tg, start_prev_m, end_prev_m)
+			pen_prev_month = (linked_prev_month * 100 / m_prev_month) if m_prev_month > 0 else 0
+			def _delta_pp(a: float, b: float) -> int:
+				return int(round(a - b))
+			d_pen_day = _delta_pp(int(round(pen_day)), int(round(pen_prev_day)))
+			d_pen_week = _delta_pp(int(round(pen_week)), int(round(pen_prev_week)))
+			d_pen_month = _delta_pp(int(round(pen_month)), int(round(pen_prev_month)))
+			# breakdown
+			items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
+			items.sort(key=lambda x: (-x[1], x[0]))
+			breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
+			lines = []
+			lines.append(f"- Сегодня: {int(round(pen_day))}% ({today_total}шт.) факт / {pen_target}% план / {int(round((pen_day/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_day}%")
+			lines.append(f"- Сегодня по продуктам: {breakdown}")
+			lines.append(f"- Неделя: {int(round(pen_week))}% ({week_total}шт.) факт / {pen_target}% план / {int(round((pen_week/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_week}%")
+			lines.append(f"- Месяц: {int(round(pen_month))}% ({month_total}шт.) факт / {pen_target}% план / {int(round((pen_month/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_month}%")
+			text = f"{name} — авто‑сводка\n" + "\n".join(lines) + "\n"
+			# AI comment
+			stats_dwm = self.db.stats_day_week_month(tg, today)
+			month_rank = self.db.month_ranking(start_month, today)
+			comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, "[AUTO_SUMMARY_13] Оцени результаты и дай рекомендации")
+			await self.push_func(tg, text + self._shape_ai_comment(comment) + "\n")
+			# log sent
+			try:
+				self.db.log(tg, "autosum_13_sent", {"hour": 13})
+			except Exception:
+				pass
 
 	async def _send_email_report(self) -> None:
 		settings = get_settings()
