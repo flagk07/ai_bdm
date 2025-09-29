@@ -324,6 +324,8 @@ class StatsScheduler:
 		# Email report at 11:00 and 19:00 Moscow time
 		if email_enabled:
 			self.scheduler.add_job(self._send_email_report, CronTrigger(hour="11,19", minute=0))
+		# Auto-close workday at 21:00 local time
+		self.scheduler.add_job(self._auto_close_workday, CronTrigger(hour=21, minute=0))
 		self.scheduler.start()
 
 	async def _send_email_report(self) -> None:
@@ -422,3 +424,51 @@ class StatsScheduler:
 				self.db.log(None, "email_report_send_error", {"error": str(e)})
 			except Exception:
 				pass 
+
+	async def _auto_close_workday(self) -> None:
+		day = date.today()
+		# For each active employee: if work is open, close and send summary
+		try:
+			rows = self.db.list_active_employees()
+		except Exception:
+			rows = []
+		for r in rows or []:
+			try:
+				tg = int(r.get("tg_id"))
+			except Exception:
+				continue
+			# naive: close unconditionally at cutoff
+			try:
+				self.db.work_close(tg)
+			except Exception:
+				pass
+			# Compose summary similar to end-of-day
+			stats = self.db.stats_day_week_month(tg, day)
+			plan = self.db.compute_plan_breakdown(tg, day)
+			pen_target = int(plan.get('penetration_target_pct', 50))
+			start_week = day - timedelta(days=day.weekday())
+			start_month = day.replace(day=1)
+			m_day = self.db.meets_period_count(tg, day, day)
+			m_week = self.db.meets_period_count(tg, start_week, day)
+			m_month = self.db.meets_period_count(tg, start_month, day)
+			linked_day = self.db.attempts_linked_period_count(tg, day, day)
+			linked_week = self.db.attempts_linked_period_count(tg, start_week, day)
+			linked_month = self.db.attempts_linked_period_count(tg, start_month, day)
+			pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
+			pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
+			pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
+			items = [(p, c) for p, c in (stats['today']['by_product'] or {}).items() if c > 0]
+			items.sort(key=lambda x: (-x[1], x[0]))
+			breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
+			day_total = int(stats['today']['total']); week_total = int(stats['week']['total']); month_total = int(stats['month']['total'])
+			lines = []
+			lines.append(f"- Сегодня: {int(round(pen_day))}% ({day_total}шт.) факт / {pen_target}% план / {int(round((pen_day/(pen_target if pen_target>0 else 1))*100))}% выполнение")
+			lines.append(f"- Сегодня по продуктам: — {breakdown}")
+			lines.append(f"- Неделя: {int(round(pen_week))}% ({week_total}шт.) факт / {pen_target}% план / {int(round((pen_week/(pen_target if pen_target>0 else 1))*100))}% выполнение")
+			lines.append(f"- Месяц: { self._fmt1(pen_month)}% ({month_total}шт.) факт / {pen_target}% план / {int(round((pen_month/(pen_target if pen_target>0 else 1))*100))}% выполнение")
+			text = "\n".join(lines)
+			# AI comment
+			stats_dwm = self.db.stats_day_week_month(tg, day)
+			month_rank = self.db.month_ranking(start_month, day)
+			comment = get_assistant_reply(self.db, tg, r.get("agent_name") or f"agent?{tg}", stats_dwm, month_rank, "[AUTO_CLOSE] Оцени результаты и предложи план на завтра")
+			await self.push_func(tg, text + "\n" + self._shape_ai_comment(comment)) 

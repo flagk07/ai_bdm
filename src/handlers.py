@@ -41,10 +41,16 @@ class MeetSession:
 	product: Optional[str]
 
 
+def _kb_work_open() -> ReplyKeyboardMarkup:
+	return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Начать работу")]], resize_keyboard=True)
+
+
 def main_keyboard() -> ReplyKeyboardMarkup:
+	# Full keyboard when work is open
 	return ReplyKeyboardMarkup(keyboard=[
 		[KeyboardButton(text="Статистика"), KeyboardButton(text="Заметки")],
 		[KeyboardButton(text="Внести встречу"), KeyboardButton(text="Помощник")],
+		[KeyboardButton(text="Завершить работу")],
 	], resize_keyboard=True)
 
 
@@ -114,11 +120,81 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			await message.answer("Временная ошибка базы. Повторите позже.")
 			return
 		db.log(user_id, "start", {"username": message.from_user.username})
-		await message.answer(f"Привет, {emp.agent_name}!", reply_markup=main_keyboard())
+		# Gate by work session
+		if db.work_is_open(user_id):
+			await message.answer(f"Привет, {emp.agent_name}!", reply_markup=main_keyboard())
+		else:
+			await message.answer(f"Привет, {emp.agent_name}! Нажми 'Начать работу' чтобы активировать функции.", reply_markup=_kb_work_open())
 
 	@dp.message(Command("menu"))
 	async def menu_handler(message: Message) -> None:
-		await message.answer("Меню", reply_markup=main_keyboard())
+		if db.work_is_open(message.from_user.id):
+			await message.answer("Меню", reply_markup=main_keyboard())
+		else:
+			await message.answer("Меню", reply_markup=_kb_work_open())
+
+	# Workday control
+	@dp.message(F.text == "Начать работу")
+	async def work_open_handler(message: Message) -> None:
+		user_id = message.from_user.id
+		if not db.is_allowed(user_id):
+			await message.answer("Доступ ограничен.")
+			return
+		db.work_open(user_id)
+		plan = db.compute_plan_breakdown(user_id, date.today())
+		pen_target = int(plan.get('penetration_target_pct', 50))
+		await message.answer(f"- цель сегодня не менее {pen_target}% проникновений кросс-продаж во встречи, у тебя все получится!", reply_markup=main_keyboard())
+
+	@dp.message(F.text == "Завершить работу")
+	async def work_close_handler(message: Message) -> None:
+		user_id = message.from_user.id
+		if not db.is_allowed(user_id):
+			await message.answer("Доступ ограничен.")
+			return
+		db.work_close(user_id)
+		# Build end-of-day report
+		today = date.today()
+		stats = db.stats_day_week_month(user_id, today)
+		plan = db.compute_plan_breakdown(user_id, today)
+		pen_target = int(plan.get('penetration_target_pct', 50))
+		start_week = today - timedelta(days=today.weekday())
+		start_month = today.replace(day=1)
+		m_day = db.meets_period_count(user_id, today, today)
+		m_week = db.meets_period_count(user_id, start_week, today)
+		m_month = db.meets_period_count(user_id, start_month, today)
+		linked_day = db.attempts_linked_period_count(user_id, today, today)
+		linked_week = db.attempts_linked_period_count(user_id, start_week, today)
+		linked_month = db.attempts_linked_period_count(user_id, start_month, today)
+		pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
+		pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
+		pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
+		# previous periods for deltas
+		prev_day_total, _ = db._sum_attempts_query(user_id, today - timedelta(days=1), today - timedelta(days=1))
+		prev_week_total, _ = db._sum_attempts_query(user_id, start_week - timedelta(days=7), start_week - timedelta(days=1))
+		prev_month_total, _ = db._sum_attempts_query(user_id, (start_month - timedelta(days=1)).replace(day=1), start_month - timedelta(days=1))
+		def _delta(curr: int, prev: int) -> int:
+			base = prev if prev > 0 else 1
+			return int(round((curr - prev) * 100 / base))
+		today_total = int(stats['today']['total'])
+		week_total = int(stats['week']['total'])
+		month_total = int(stats['month']['total'])
+		d_pen_day = _delta(int(round(pen_day)), 0)
+		d_pen_week = _delta(int(round(pen_week)), 0)
+		d_pen_month = _delta(int(round(pen_month)), 0)
+		# products line today
+		items = [(p, c) for p, c in (stats['today']['by_product'] or {}).items() if c > 0]
+		items.sort(key=lambda x: (-x[1], x[0]))
+		breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
+		lines = []
+		lines.append(f"- Сегодня: {int(round(pen_day))}% ({today_total}шт.) факт / {pen_target}% план / {int(round((pen_day/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_day}%")
+		lines.append(f"- Сегодня по продуктам: — {breakdown}")
+		lines.append(f"- Неделя: {int(round(pen_week))}% ({week_total}шт.) факт / {pen_target}% план / {int(round((pen_week/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_week}%")
+		lines.append(f"- Месяц: { _fmt1(pen_month)}% ({month_total}шт.) факт / {pen_target}% план / {int(round((pen_month/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_month}%")
+		await message.answer("\n".join(lines), reply_markup=_kb_work_open())
+		# AI comment
+		month_rank = db.month_ranking(start_month, today)
+		reply = get_assistant_reply(db, user_id, db.get_or_register_employee(user_id).agent_name, stats, month_rank, "[AUTO] Оцени результаты и дай рекомендации")
+		await message.answer(reply)
 
 	# Cross attempts flow
 	@dp.message(F.text == "Внести кросс")
@@ -129,6 +205,9 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		# Access уже проверен ранее, но оставим мягкую проверку
 		if not db.is_allowed(user_id):
 			await message.answer("Доступ ограничен.")
+			return
+		if not db.work_is_open(user_id):
+			await message.answer("Начните рабочий день, чтобы пользоваться функциями", reply_markup=_kb_work_open())
 			return
 		emp = db.get_or_register_employee(user_id)
 		if not emp:
@@ -216,6 +295,9 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		user_id = message.from_user.id
 		if not db.is_allowed(user_id):
 			await message.answer("Доступ ограничен.")
+			return
+		if not db.work_is_open(user_id):
+			await message.answer("Начните рабочий день, чтобы пользоваться функциями", reply_markup=_kb_work_open())
 			return
 		await state.set_state(MeetStates.selecting)
 		await state.update_data(meet=MeetSession(product=None).__dict__)
@@ -311,6 +393,9 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		if not db.is_allowed(user_id):
 			await message.answer("Доступ ограничен.")
 			return
+		if not db.work_is_open(user_id):
+			await message.answer("Начните рабочий день, чтобы пользоваться функциями", reply_markup=_kb_work_open())
+			return
 		emp = db.get_or_register_employee(user_id)
 		if not emp:
 			await message.answer("Временная ошибка базы. Повторите позже.")
@@ -400,6 +485,9 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	@dp.message(Command("assistant"))
 	@dp.message(lambda m: (m.text or "").strip().lower() == "помощник")
 	async def assistant_start(message: Message, state: FSMContext) -> None:
+		if not db.work_is_open(message.from_user.id):
+			await message.answer("Начните рабочий день, чтобы пользоваться функциями", reply_markup=_kb_work_open())
+			return
 		await state.set_state(AssistantStates.chatting)
 		await state.update_data(mode="assistant")
 		await message.answer("Я готов помочь. Напишите вопрос. /cancel для выхода")
@@ -451,6 +539,9 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	async def catch_all(message: Message, state: FSMContext) -> None:
 		# If not allowed, short-circuit
 		if not db.is_allowed(message.from_user.id):
+			return
+		if not db.work_is_open(message.from_user.id):
+			await message.answer("Начните рабочий день, чтобы пользоваться функциями", reply_markup=_kb_work_open())
 			return
 		# Ensure assistant mode and forward
 		await state.set_state(AssistantStates.chatting)

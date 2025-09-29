@@ -327,7 +327,7 @@ class Database:
 		self.client.table("assistant_messages").insert({"tg_id": tg_id, "role": role, "content_sanitized": clean, "off_topic": off_topic, "auto": auto}).execute()
 
 	def get_assistant_messages(self, tg_id: int, limit: int = 20) -> List[Dict[str, Any]]:
-		res = self.client.table("assistant_messages").select("role, content_sanitized, off_topic, auto").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
+		res = self.client.table("сassistant_messages").select("role, content_sanitized, off_topic, auto").eq("tg_id", tg_id).order("created_at", desc=True).limit(limit).execute()
 		msgs = getattr(res, "data", []) or []
 		msgs.reverse()
 		return msgs
@@ -481,3 +481,53 @@ class Database:
 		except Exception:
 			pass
 		_LOCAL_SLOTS.pop(int(tg_id), None) 
+
+	def get_employee_timezone(self, tg_id: int, default_tz: str = "Europe/Moscow") -> str:
+		try:
+			res = self.client.table("employees").select("timezone").eq("tg_id", tg_id).maybe_single().execute()
+			row = getattr(res, "data", None)
+			if row and (row.get("timezone")):
+				return str(row.get("timezone"))
+		except Exception:
+			pass
+		return default_tz
+
+	def work_is_open(self, tg_id: int) -> bool:
+		"""Detect current work session state from last work_open/work_close log."""
+		try:
+			q = (
+				self.client
+				.table("logs")
+				.select("action, created_at")
+				.eq("tg_id", tg_id)
+				.in_("action", ["work_open", "work_close"])  # type: ignore
+				.order("created_at", desc=True)
+				.limit(1)
+				.execute()
+			)
+			rows = getattr(q, "data", []) or []
+			if rows:
+				return (rows[0].get("action") == "work_open")
+		except Exception:
+			pass
+		return False
+
+	def work_open(self, tg_id: int) -> None:
+		try:
+			self.log(tg_id, "work_open", {})
+		except Exception:
+			pass
+
+	def work_close(self, tg_id: int) -> None:
+		try:
+			self.log(tg_id, "work_close", {})
+		except Exception:
+			pass
+
+	def list_active_employees(self) -> List[Dict[str, Any]]:
+		"""Return basic info for active employees: tg_id, agent_name, timezone."""
+		try:
+			res = self.client.table("employees").select("tg_id, agent_name, timezone, active").eq("active", True).execute()
+			return getattr(res, "data", []) or []
+		except Exception:
+			return [] 
