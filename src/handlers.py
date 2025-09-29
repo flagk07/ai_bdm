@@ -57,8 +57,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
 	return ReplyKeyboardMarkup(keyboard=[
 		[KeyboardButton(text="Статистика"), KeyboardButton(text="Заметки")],
 		[KeyboardButton(text="Внести встречу"), KeyboardButton(text="Помощник")],
-		[KeyboardButton(text="Массовая выдача")],
-		[KeyboardButton(text="Завершить работу")],
+		[KeyboardButton(text="Массовая выдача"), KeyboardButton(text="Завершить работу")],
 	], resize_keyboard=True)
 
 
