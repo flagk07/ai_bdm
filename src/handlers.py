@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import json
 from typing import Any, Dict, Set, List, Optional
 
 from aiogram import Bot, Dispatcher, F
@@ -168,19 +169,28 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
 		pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
 		pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
-		# previous periods for deltas
-		prev_day_total, _ = db._sum_attempts_query(user_id, today - timedelta(days=1), today - timedelta(days=1))
-		prev_week_total, _ = db._sum_attempts_query(user_id, start_week - timedelta(days=7), start_week - timedelta(days=1))
-		prev_month_total, _ = db._sum_attempts_query(user_id, (start_month - timedelta(days=1)).replace(day=1), start_month - timedelta(days=1))
-		def _delta(curr: int, prev: int) -> int:
-			base = prev if prev > 0 else 1
-			return int(round((curr - prev) * 100 / base))
+		# previous penetrations for Δ (percentage-point difference)
+		m_prev_day = db.meets_period_count(user_id, today - timedelta(days=1), today - timedelta(days=1))
+		linked_prev_day = db.attempts_linked_period_count(user_id, today - timedelta(days=1), today - timedelta(days=1))
+		pen_prev_day = (linked_prev_day * 100 / m_prev_day) if m_prev_day > 0 else 0
+		start_prev_w = start_week - timedelta(days=7)
+		end_prev_w = start_week - timedelta(days=1)
+		m_prev_week = db.meets_period_count(user_id, start_prev_w, end_prev_w)
+		linked_prev_week = db.attempts_linked_period_count(user_id, start_prev_w, end_prev_w)
+		pen_prev_week = (linked_prev_week * 100 / m_prev_week) if m_prev_week > 0 else 0
+		end_prev_m = start_month - timedelta(days=1)
+		start_prev_m = end_prev_m.replace(day=1)
+		m_prev_month = db.meets_period_count(user_id, start_prev_m, end_prev_m)
+		linked_prev_month = db.attempts_linked_period_count(user_id, start_prev_m, end_prev_m)
+		pen_prev_month = (linked_prev_month * 100 / m_prev_month) if m_prev_month > 0 else 0
+		def _delta_pp(curr_pct: float, prev_pct: float) -> int:
+			return int(round(curr_pct - prev_pct))
 		today_total = int(stats['today']['total'])
 		week_total = int(stats['week']['total'])
 		month_total = int(stats['month']['total'])
-		d_pen_day = _delta(int(round(pen_day)), 0)
-		d_pen_week = _delta(int(round(pen_week)), 0)
-		d_pen_month = _delta(int(round(pen_month)), 0)
+		d_pen_day = _delta_pp(int(round(pen_day)), int(round(pen_prev_day)))
+		d_pen_week = _delta_pp(int(round(pen_week)), int(round(pen_prev_week)))
+		d_pen_month = _delta_pp(int(round(pen_month)), int(round(pen_prev_month)))
 		# products line today
 		items = [(p, c) for p, c in (stats['today']['by_product'] or {}).items() if c > 0]
 		items.sort(key=lambda x: (-x[1], x[0]))
@@ -190,11 +200,34 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		lines.append(f"- Сегодня по продуктам: — {breakdown}")
 		lines.append(f"- Неделя: {int(round(pen_week))}% ({week_total}шт.) факт / {pen_target}% план / {int(round((pen_week/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_week}%")
 		lines.append(f"- Месяц: { _fmt1(pen_month)}% ({month_total}шт.) факт / {pen_target}% план / {int(round((pen_month/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_month}%")
-		await message.answer("\n".join(lines), reply_markup=_kb_work_open())
-		# AI comment
+		# Build AI prompt with embedded stats JSON so the model uses current results
+		payload = {
+			"period": {"label": "День", "start": today.isoformat(), "end": today.isoformat()},
+			"current": {
+				"day":   {"cross_fact": today_total,  "meet": m_day,   "penetration_pct": int(round(pen_day))},
+				"week":  {"cross_fact": week_total,   "meet": m_week,  "penetration_pct": int(round(pen_week))},
+				"month": {"cross_fact": month_total,  "meet": m_month, "penetration_pct": int(round(pen_month))},
+			},
+			"previous": {
+				"day":   {"penetration_pct": int(round(pen_prev_day))},
+				"week":  {"penetration_pct": int(round(pen_prev_week))},
+				"month": {"penetration_pct": int(round(pen_prev_month))},
+			},
+			"targets": {"penetration_target_pct": pen_target}
+		}
+		policy = (
+			"[EOD_POLICY]\n"
+			"Задача: оцени результаты сотрудника по STATS_JSON и дай краткие рекомендации.\n"
+			"Правила: используй ТОЛЬКО числа из STATS_JSON; не выдумывай. Сфокусируйся на повышении конверсии, не предлагай увеличивать количество встреч.\n"
+			"Формат: 1) Выводы 2) Рекомендации/план на завтра.\n"
+		)
+		ai_prompt = policy + "\n[STATS_JSON]\n" + json.dumps(payload, ensure_ascii=False)
 		month_rank = db.month_ranking(start_month, today)
-		reply = get_assistant_reply(db, user_id, db.get_or_register_employee(user_id).agent_name, stats, month_rank, "[AUTO] Оцени результаты и дай рекомендации")
-		await message.answer(reply)
+		emp = db.get_or_register_employee(user_id)
+		reply_ai = get_assistant_reply(db, user_id, (emp.agent_name if emp else "Агент"), stats, month_rank, ai_prompt)
+		# Send a single combined message
+		final_msg = "\n".join(lines) + "\n" + reply_ai
+		await message.answer(final_msg, reply_markup=_kb_work_open())
 
 	# Cross attempts flow
 	@dp.message(F.text == "Внести кросс")
