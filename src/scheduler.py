@@ -318,12 +318,12 @@ class StatsScheduler:
 		# Daily advisor summary at 20:00
 		if notify_enabled:
 			self.scheduler.add_job(self._send_daily, CronTrigger(hour=20, minute=0))
-		# Periodic summary (every 5 minutes) — only when notifications enabled
+		# Periodic summary — only when notifications enabled
 		if notify_enabled:
-			self.scheduler.add_job(self._send_periodic, CronTrigger(minute="*/59"))
-		# Email report every 5 minutes (test mode) — controlled separately
+			self.scheduler.add_job(self._send_periodic, CronTrigger(minute="*/120"))
+		# Email report at 11:00 and 19:00 Moscow time
 		if email_enabled:
-			self.scheduler.add_job(self._send_email_report, CronTrigger(minute="*/30"))
+			self.scheduler.add_job(self._send_email_report, CronTrigger(hour=[11,19], minute=0))
 		self.scheduler.start()
 
 	async def _send_email_report(self) -> None:
