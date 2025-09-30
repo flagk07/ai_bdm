@@ -145,11 +145,26 @@ class Database:
 
 	def meets_period_count(self, tg_id: int, start: date, end: date) -> int:
 		try:
-			res = self.client.table("meet").select("id").eq("tg_id", tg_id).gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
+			# Prefer summing meet_count when column exists
+			res = self.client.table("meet").select("id, meet_count").eq("tg_id", tg_id).gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
 			rows = getattr(res, "data", []) or []
-			return len(rows)
+			if not rows:
+				return 0
+			cnt = 0
+			for r in rows:
+				try:
+					cnt += int(r.get("meet_count", 1) or 1)
+				except Exception:
+					cnt += 1
+			return cnt
 		except Exception:
-			return 0
+			# Fallback: count rows if select failed (e.g., column missing)
+			try:
+				res2 = self.client.table("meet").select("id").eq("tg_id", tg_id).gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
+				rows2 = getattr(res2, "data", []) or []
+				return len(rows2)
+			except Exception:
+				return 0
 
 	def attempts_linked_period_count(self, tg_id: int, start: date, end: date) -> int:
 		try:
@@ -175,8 +190,10 @@ class Database:
 		ranking.sort(key=lambda x: x[2], reverse=True)
 		return [{"tg_id": tg, "agent_name": name, "total": total} for tg, name, total in ranking]
 
-	def create_meet(self, tg_id: int, product_code: str, d: Optional[date] = None) -> Optional[str]:
-		"""Create a meeting row and return meet.id (uuid as string)."""
+	def create_meet(self, tg_id: int, product_code: str, d: Optional[date] = None, meet_count: int = 1) -> Optional[str]:
+		"""Create a meeting row and return meet.id (uuid as string).
+		- meet_count: number of meetings to record in this row (default 1)
+		"""
 		day = d or date.today()
 		try:
 			# Ensure employee exists (FK)
@@ -184,12 +201,23 @@ class Database:
 				self.client.table("employees").select("tg_id").eq("tg_id", tg_id).single().execute()
 			except Exception:
 				self.client.table("employees").upsert({"tg_id": tg_id}, on_conflict="tg_id").execute()
-			# Insert first (no select chaining to avoid client limitations)
-			self.client.table("meet").insert({
+			# Insert with meet_count when column exists; fallback to insert without if fails
+			insert_payload = {
 				"tg_id": tg_id,
 				"product_code": product_code,
 				"for_date": day.isoformat(),
-			}).execute()
+			}
+			try:
+				payload_with_count = dict(insert_payload)
+				payload_with_count["meet_count"] = int(meet_count) if int(meet_count) > 0 else 1
+				self.client.table("meet").insert(payload_with_count).execute()
+			except Exception as e_ins:
+				# Retry without meet_count for backward compatibility
+				try:
+					self.client.table("meet").insert(insert_payload).execute()
+					self.log(tg_id, "meet_count_ignored", {"reason": str(e_ins)[:200]})
+				except Exception:
+					raise
 			# Then select the most recent matching row for this user/day/product
 			sel = (
 				self.client.table("meet")
@@ -205,10 +233,15 @@ class Database:
 			if rows:
 				meet_id = rows[0]["id"]
 				try:
-					self.log(tg_id, "meet_create", {"meet_id": meet_id, "product_code": product_code, "for_date": day.isoformat()})
+					self.log(tg_id, "meet_create", {"meet_id": meet_id, "product_code": product_code, "for_date": day.isoformat(), "meet_count": int(meet_count)})
 				except Exception:
 					pass
 				return str(meet_id)
+			# Diagnostic: insert succeeded but no row retrieved
+			try:
+				self.log(tg_id, "meet_create_missing", {"product_code": product_code, "for_date": day.isoformat()})
+			except Exception:
+				pass
 			return None
 		except Exception as e:
 			try:

@@ -198,17 +198,12 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		data = await state.get_data(); mi = data.get("mi", {})
 		zp = int(mi.get("zp", 0) or 0)
 		try:
-			created = 0
 			first_meet_id = None
 			if zp > 0:
-				for i in range(zp):
-					mid = db.create_meet(call.from_user.id, "ЗП", date.today())
-					if mid:
-						created += 1
-						if first_meet_id is None:
-							first_meet_id = mid
+				# Create a single meet row for ZP with meet_count = zp
+				first_meet_id = db.create_meet(call.from_user.id, "ЗП", date.today(), meet_count=zp)
 				try:
-					db.log(call.from_user.id, "mass_issue_saved", {"zp": zp, "meets_created": created, "first_meet_id": first_meet_id})
+					db.log(call.from_user.id, "mass_issue_saved", {"zp": zp, "meets_created": 1, "first_meet_id": first_meet_id})
 				except Exception:
 					pass
 			await call.message.answer("Результат сохранен", reply_markup=main_keyboard())
@@ -223,6 +218,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		data = await state.get_data(); mi = data.get("mi", {})
 		cross = mi.get("cross") or {}
 		await state.set_state(MassIssueStates.cross_selecting)
+		# Preserve zp value for later linking; meet will be created on done or was created already if user pressed done before cross
 		await state.update_data(mi={"zp": int(mi.get("zp", 0) or 0), "cross": cross, "awaiting": None})
 		await call.message.answer("Внесите кросс-продажи: выберите продукт, затем введите количество", reply_markup=_kb_mass_cross(cross))
 		await call.answer()
@@ -275,14 +271,11 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 			return _re.sub(r"\s+", " ", (p or "").replace('\xa0', ' ')).strip()
 		norm_cross = {_norm(k): int(v) for k, v in (cross or {}).items() if int(v) > 0}
 		try:
-			# create exactly ZP meets now; link cross to the first
+			# Ensure we have a meet session for ZP; create single meet with meet_count = zp
 			meet_id = None
 			if zp > 0:
-				for i in range(zp):
-					mid = db.create_meet(call.from_user.id, "ЗП", date.today())
-					if meet_id is None and mid:
-						meet_id = mid
-			# save cross attempts linked to session meet
+				meet_id = db.create_meet(call.from_user.id, "ЗП", date.today(), meet_count=zp)
+			# save cross attempts linked to the session meet
 			if norm_cross:
 				db.save_attempts(call.from_user.id, norm_cross, date.today(), meet_id=meet_id)
 				try:
