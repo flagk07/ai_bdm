@@ -152,7 +152,8 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		row: List[InlineKeyboardButton] = []
 		for idx, p in enumerate(PRODUCTS):
 			c = selected.get(p, 0)
-			label = f"{p} [{c}]"
+			mark = f"[🟢{c}]" if c > 0 else "[0]"
+			label = f"{p} {mark}"
 			row.append(InlineKeyboardButton(text=label, callback_data=f"mic:set:{p}"))
 			if (idx + 1) % 2 == 0:
 				buttons.append(row); row = []
@@ -206,7 +207,19 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 					db.log(call.from_user.id, "mass_issue_saved", {"zp": zp, "meets_created": 1, "first_meet_id": first_meet_id})
 				except Exception:
 					pass
+			# Summary after save
+			today = date.today()
+			stats = db.stats_day_week_month(call.from_user.id, today)
+			start_week = today - timedelta(days=today.weekday())
+			start_month = today.replace(day=1)
+			m_day = db.meets_period_count(call.from_user.id, today, today)
+			m_week = db.meets_period_count(call.from_user.id, start_week, today)
+			m_month = db.meets_period_count(call.from_user.id, start_month, today)
+			cross_line = f"Кросс: День {int(stats['today']['total'])} | Неделя {int(stats['week']['total'])} | Месяц {int(stats['month']['total'])}"
+			meet_line = f"Встречи: День {m_day} | Неделя {m_week} | Месяц {m_month}"
 			await call.message.answer("Результат сохранен", reply_markup=main_keyboard())
+			await call.message.answer(cross_line)
+			await call.message.answer(meet_line)
 		except Exception as e:
 			db.log(call.from_user.id, "error", {"where": "mass_issue_done", "error": str(e)})
 			await call.message.answer("Ошибка сохранения. Повторите позже.", reply_markup=main_keyboard())
@@ -282,7 +295,19 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 					db.log(call.from_user.id, "mass_cross_saved", {"zp": zp, "cross": norm_cross, "meet_id": meet_id})
 				except Exception:
 					pass
+			# Summary after save
+			today = date.today()
+			stats = db.stats_day_week_month(call.from_user.id, today)
+			start_week = today - timedelta(days=today.weekday())
+			start_month = today.replace(day=1)
+			m_day = db.meets_period_count(call.from_user.id, today, today)
+			m_week = db.meets_period_count(call.from_user.id, start_week, today)
+			m_month = db.meets_period_count(call.from_user.id, start_month, today)
+			cross_line = f"Кросс: День {int(stats['today']['total'])} | Неделя {int(stats['week']['total'])} | Месяц {int(stats['month']['total'])}"
+			meet_line = f"Встречи: День {m_day} | Неделя {m_week} | Месяц {m_month}"
 			await call.message.answer("Результат сохранен", reply_markup=main_keyboard())
+			await call.message.answer(cross_line)
+			await call.message.answer(meet_line)
 		except Exception as e:
 			try:
 				db.log(call.from_user.id, "error", {"where": "mass_cross_done", "error": str(e), "cross": (norm_cross or cross)})
