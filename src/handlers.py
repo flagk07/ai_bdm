@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import json
 from typing import Any, Dict, Set, List, Optional
+import re as _re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -197,10 +198,17 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		data = await state.get_data(); mi = data.get("mi", {})
 		zp = int(mi.get("zp", 0) or 0)
 		try:
+			created = 0
+			first_meet_id = None
 			if zp > 0:
-				db.save_attempts(call.from_user.id, {"ЗП": zp}, date.today())
+				for i in range(zp):
+					mid = db.create_meet(call.from_user.id, "ЗП", date.today())
+					if mid:
+						created += 1
+						if first_meet_id is None:
+							first_meet_id = mid
 				try:
-					db.log(call.from_user.id, "mass_issue_saved", {"zp": zp})
+					db.log(call.from_user.id, "mass_issue_saved", {"zp": zp, "meets_created": created, "first_meet_id": first_meet_id})
 				except Exception:
 					pass
 			await call.message.answer("Результат сохранен", reply_markup=main_keyboard())
@@ -262,21 +270,29 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 	async def mass_cross_done(call: CallbackQuery, state: FSMContext) -> None:
 		data = await state.get_data(); mi = data.get("mi", {})
 		zp = int(mi.get("zp", 0) or 0); cross = mi.get("cross") or {}
+		# normalize product codes (trim, collapse spaces, replace NBSP)
+		def _norm(p: str) -> str:
+			return _re.sub(r"\s+", " ", (p or "").replace('\xa0', ' ')).strip()
+		norm_cross = {_norm(k): int(v) for k, v in (cross or {}).items() if int(v) > 0}
 		try:
-			# save ZP if provided
+			# create exactly ZP meets now; link cross to the first
+			meet_id = None
 			if zp > 0:
-				db.save_attempts(call.from_user.id, {"ЗП": zp}, date.today())
-			# save cross attempts
-			if cross:
-				db.save_attempts(call.from_user.id, cross, date.today())
+				for i in range(zp):
+					mid = db.create_meet(call.from_user.id, "ЗП", date.today())
+					if meet_id is None and mid:
+						meet_id = mid
+			# save cross attempts linked to session meet
+			if norm_cross:
+				db.save_attempts(call.from_user.id, norm_cross, date.today(), meet_id=meet_id)
 				try:
-					db.log(call.from_user.id, "save_attempts", cross)
+					db.log(call.from_user.id, "mass_cross_saved", {"zp": zp, "cross": norm_cross, "meet_id": meet_id})
 				except Exception:
 					pass
 			await call.message.answer("Результат сохранен", reply_markup=main_keyboard())
 		except Exception as e:
 			try:
-				db.log(call.from_user.id, "error", {"where": "mass_cross_done", "error": str(e)})
+				db.log(call.from_user.id, "error", {"where": "mass_cross_done", "error": str(e), "cross": (norm_cross or cross)})
 			except Exception:
 				pass
 			await call.message.answer("Ошибка сохранения. Повторите позже.", reply_markup=main_keyboard())

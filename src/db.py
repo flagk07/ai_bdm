@@ -209,6 +209,11 @@ class Database:
 				except Exception:
 					pass
 				return str(meet_id)
+			# Diagnostic: insert succeeded but no row retrieved
+			try:
+				self.log(tg_id, "meet_create_missing", {"product_code": product_code, "for_date": day.isoformat()})
+			except Exception:
+				pass
 			return None
 		except Exception as e:
 			try:
@@ -227,9 +232,17 @@ class Database:
 		for product_code, attempt_count in attempts.items():
 			if attempt_count <= 0:
 				continue
+			# Normalize product code and skip meeting-only product 'ЗП'
+			try:
+				pc_norm = (product_code or "").replace('\xa0', ' ').strip()
+			except Exception:
+				pc_norm = str(product_code)
+			if pc_norm == "ЗП":
+				# Do not save attempts for meeting product 'ЗП'
+				continue
 			row: Dict[str, Any] = {
 				"tg_id": tg_id,
-				"product_code": product_code,
+				"product_code": pc_norm,
 				"attempt_count": attempt_count,
 				"for_date": for_date.isoformat(),
 			}
