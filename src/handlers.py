@@ -591,11 +591,8 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		month_rank = db.month_ranking(today.replace(day=1), today)
 		pos = next((i+1 for i, r in enumerate(month_rank) if r["tg_id"] == user_id), None)
 		# Compute group Top-2 by application timezone (common reference)
-		try:
-			app_tz = _pytz.timezone(get_settings().timezone)
-			top2_date = app_tz.localize(datetime.now()).date()
-		except Exception:
-			top2_date = today
+		# Stored for_date uses server date.today(), so use that for ranking to match data
+		top2_date = date.today()
 		top2, bottom2 = db.day_top_bottom(top2_date)
 		top_str = ", ".join([r["agent_name"] for r in top2]) if top2 else "—"
 		bottom_str = ", ".join([r["agent_name"] for r in bottom2]) if bottom2 else "—"

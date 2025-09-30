@@ -321,6 +321,8 @@ class StatsScheduler:
 		# Email report at 11:00 and 19:00 Moscow time
 		if email_enabled:
 			self.scheduler.add_job(self._send_email_report, CronTrigger(hour="11,19", minute=0))
+			# Fallback checker every minute: if missed today after scheduled time, send once
+			self.scheduler.add_job(self._email_report_fallback_worker, CronTrigger(minute="*"))
 		# Auto-close workday at 21:00 local time via minute worker
 		self.scheduler.add_job(self._autoclose_21_worker, CronTrigger(minute="*"))
 		self.scheduler.start()
@@ -631,3 +633,33 @@ class StatsScheduler:
 				self.db.log(tg, "autoclose_21_sent", {"hour": 21})
 			except Exception:
 				pass 
+
+	async def _email_report_fallback_worker(self) -> None:
+		"""Every minute (MSK): if now past 11:00/19:00 and there is no email_report_sent today, send once and log fallback."""
+		try:
+			msk = pytz.timezone("Europe/Moscow")
+			now = datetime.now(msk)
+			if now.hour < 11:
+				return
+			# If after 11:00 but before 19:00, require at least one send today; if after 19:00 require second send
+			res = self.db.client.table("logs").select("created_at").eq("action", "email_report_sent").order("created_at", desc=True).limit(5).execute()
+			rows = getattr(res, "data", []) or []
+			count_today = 0
+			for r in rows:
+				try:
+					dt = datetime.fromisoformat(str(r.get("created_at")).replace("Z", "+00:00")).astimezone(msk)
+					if dt.date() == now.date():
+						count_today += 1
+				except Exception:
+					continue
+			needed = 1 if now.hour < 19 else 2
+			if count_today >= needed:
+				return
+			# send once
+			await self._send_email_report()
+			try:
+				self.db.log(None, "email_report_fallback", {"needed": needed, "count_today": count_today})
+			except Exception:
+				pass
+		except Exception:
+			pass 
