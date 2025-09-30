@@ -152,8 +152,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		row: List[InlineKeyboardButton] = []
 		for idx, p in enumerate(PRODUCTS):
 			c = selected.get(p, 0)
-			mark = f"[🟢{c}]" if c > 0 else "[0]"
-			label = f"{p} {mark}"
+			label = f"{p} [{c}]"
 			row.append(InlineKeyboardButton(text=label, callback_data=f"mic:set:{p}"))
 			if (idx + 1) % 2 == 0:
 				buttons.append(row); row = []
