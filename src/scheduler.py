@@ -321,8 +321,8 @@ class StatsScheduler:
 		# Email report at 11:00 and 19:00 Moscow time
 		if email_enabled:
 			self.scheduler.add_job(self._send_email_report, CronTrigger(hour="11,19", minute=0))
-		# Auto-close workday at 21:00 local time
-		self.scheduler.add_job(self._auto_close_workday, CronTrigger(hour=21, minute=0))
+		# Auto-close workday at 21:00 local time via minute worker
+		self.scheduler.add_job(self._autoclose_21_worker, CronTrigger(minute="*"))
 		self.scheduler.start()
 
 	async def _autosum_13_worker(self) -> None:
@@ -517,50 +517,117 @@ class StatsScheduler:
 			except Exception:
 				pass 
 
-	async def _auto_close_workday(self) -> None:
-		day = date.today()
-		# For each active employee: if work is open, close and send summary
+	async def _autoclose_21_worker(self) -> None:
+		"""Every minute: for each active employee, if local time is 21:00 and work is open, close and send end-of-day with STATS_JSON once per day."""
 		try:
-			rows = self.db.list_active_employees()
+			emps = self.db.list_active_employees()
 		except Exception:
-			rows = []
-		for r in rows or []:
+			emps = []
+		for r in (emps or []):
+			# user id
 			try:
 				tg = int(r.get("tg_id"))
 			except Exception:
 				continue
-			# naive: close unconditionally at cutoff
+			# only if session open
+			if not self.db.work_is_open(tg):
+				continue
+			# local tz and time check
+			tz_name = (r.get("timezone") or get_settings().timezone)
 			try:
-				self.db.work_close(tg)
+				tz = pytz.timezone(tz_name)
+			except Exception:
+				tz = pytz.timezone(get_settings().timezone)
+			now_local = datetime.now(tz)
+			if now_local.hour != 21:
+				continue
+			# dup guard: already closed today?
+			try:
+				rec = self.db.client.table("logs").select("created_at").eq("tg_id", tg).eq("action", "autoclose_21_sent").order("created_at", desc=True).limit(1).execute()
+				rows = getattr(rec, "data", []) or []
+				if rows:
+					dt = datetime.fromisoformat(str(rows[0].get("created_at")).replace("Z", "+00:00")).astimezone(tz)
+					if dt.date() == now_local.date():
+						continue
 			except Exception:
 				pass
-			# Compose summary similar to end-of-day
-			stats = self.db.stats_day_week_month(tg, day)
-			plan = self.db.compute_plan_breakdown(tg, day)
-			pen_target = int(plan.get('penetration_target_pct', 50))
-			start_week = day - timedelta(days=day.weekday())
-			start_month = day.replace(day=1)
-			m_day = self.db.meets_period_count(tg, day, day)
-			m_week = self.db.meets_period_count(tg, start_week, day)
-			m_month = self.db.meets_period_count(tg, start_month, day)
-			linked_day = self.db.attempts_linked_period_count(tg, day, day)
-			linked_week = self.db.attempts_linked_period_count(tg, start_week, day)
-			linked_month = self.db.attempts_linked_period_count(tg, start_month, day)
+			# Build STATS and message
+			today = now_local.date()
+			start_week = today - timedelta(days=today.weekday())
+			start_month = today.replace(day=1)
+			name = r.get("agent_name") or f"agent?{tg}"
+			# Totals and penetration
+			today_total, today_by = self.db._sum_attempts_query(tg, today, today)
+			week_total, _ = self.db._sum_attempts_query(tg, start_week, today)
+			month_total, _ = self.db._sum_attempts_query(tg, start_month, today)
+			m_day = self.db.meets_period_count(tg, today, today)
+			m_week = self.db.meets_period_count(tg, start_week, today)
+			m_month = self.db.meets_period_count(tg, start_month, today)
+			linked_day = self.db.attempts_linked_period_count(tg, today, today)
+			linked_week = self.db.attempts_linked_period_count(tg, start_week, today)
+			linked_month = self.db.attempts_linked_period_count(tg, start_month, today)
 			pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
 			pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
 			pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
-			items = [(p, c) for p, c in (stats['today']['by_product'] or {}).items() if c > 0]
+			pen_target = int(self.db.compute_plan_breakdown(tg, today).get('penetration_target_pct', 50))
+			# deltas (previous periods)
+			start_prev_w = start_week - timedelta(days=7)
+			end_prev_w = start_week - timedelta(days=1)
+			m_prev_day = self.db.meets_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+			linked_prev_day = self.db.attempts_linked_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+			pen_prev_day = (linked_prev_day * 100 / m_prev_day) if m_prev_day > 0 else 0
+			m_prev_week = self.db.meets_period_count(tg, start_prev_w, end_prev_w)
+			linked_prev_week = self.db.attempts_linked_period_count(tg, start_prev_w, end_prev_w)
+			pen_prev_week = (linked_prev_week * 100 / m_prev_week) if m_prev_week > 0 else 0
+			end_prev_m = start_month - timedelta(days=1)
+			start_prev_m = end_prev_m.replace(day=1)
+			m_prev_month = self.db.meets_period_count(tg, start_prev_m, end_prev_m)
+			linked_prev_month = self.db.attempts_linked_period_count(tg, start_prev_m, end_prev_m)
+			pen_prev_month = (linked_prev_month * 100 / m_prev_month) if m_prev_month > 0 else 0
+			def _delta_pp(a: float, b: float) -> int:
+				return int(round(a - b))
+			d_pen_day = _delta_pp(int(round(pen_day)), int(round(pen_prev_day)))
+			d_pen_week = _delta_pp(int(round(pen_week)), int(round(pen_prev_week)))
+			d_pen_month = _delta_pp(int(round(pen_month)), int(round(pen_prev_month)))
+			# breakdown line
+			items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
 			items.sort(key=lambda x: (-x[1], x[0]))
 			breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
-			day_total = int(stats['today']['total']); week_total = int(stats['week']['total']); month_total = int(stats['month']['total'])
-			lines = []
-			lines.append(f"- Сегодня: {int(round(pen_day))}% ({day_total}шт.) факт / {pen_target}% план / {int(round((pen_day/(pen_target if pen_target>0 else 1))*100))}% выполнение")
+			lines: List[str] = []
+			lines.append(f"- Сегодня: {int(round(pen_day))}% ({today_total}шт.) факт / {pen_target}% план / {int(round((pen_day/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_day}%")
 			lines.append(f"- Сегодня по продуктам: — {breakdown}")
-			lines.append(f"- Неделя: {int(round(pen_week))}% ({week_total}шт.) факт / {pen_target}% план / {int(round((pen_week/(pen_target if pen_target>0 else 1))*100))}% выполнение")
-			lines.append(f"- Месяц: { self._fmt1(pen_month)}% ({month_total}шт.) факт / {pen_target}% план / {int(round((pen_month/(pen_target if pen_target>0 else 1))*100))}% выполнение")
-			text = "\n".join(lines)
-			# AI comment
-			stats_dwm = self.db.stats_day_week_month(tg, day)
-			month_rank = self.db.month_ranking(start_month, day)
-			comment = get_assistant_reply(self.db, tg, r.get("agent_name") or f"agent?{tg}", stats_dwm, month_rank, "[AUTO_CLOSE] Оцени результаты и предложи план на завтра")
-			await self.push_func(tg, text + "\n" + self._shape_ai_comment(comment)) 
+			lines.append(f"- Неделя: {int(round(pen_week))}% ({week_total}шт.) факт / {pen_target}% план / {int(round((pen_week/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_week}%")
+			lines.append(f"- Месяц: {int(round(pen_month))}% ({month_total}шт.) факт / {pen_target}% план / {int(round((pen_month/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_month}%")
+			# AI with STATS_JSON
+			payload = {
+				"period": {"label": "День", "start": today.isoformat(), "end": today.isoformat()},
+				"current": {
+					"day":   {"cross_fact": today_total,  "meet": m_day,   "penetration_pct": int(round(pen_day))},
+					"week":  {"cross_fact": week_total,   "meet": m_week,  "penetration_pct": int(round(pen_week))},
+					"month": {"cross_fact": month_total,  "meet": m_month, "penetration_pct": int(round(pen_month))},
+				},
+				"previous": {
+					"day":   {"penetration_pct": int(round(pen_prev_day))},
+					"week":  {"penetration_pct": int(round(pen_prev_week))},
+					"month": {"penetration_pct": int(round(pen_prev_month))},
+				},
+				"targets": {"penetration_target_pct": pen_target}
+			}
+			policy = (
+				"[AUTO_CLOSE_POLICY]\n"
+				"Задача: оцени результаты из STATS_JSON и дай краткие рекомендации.\n"
+				"Правила: используй только числа из STATS_JSON; сфокусируйся на повышении конверсии, не предлагай увеличивать количество встреч.\n"
+				"Формат: 1) Выводы 2) Рекомендации/план на завтра.\n"
+			)
+			ai_prompt = policy + "\n[STATS_JSON]\n" + json.dumps(payload, ensure_ascii=False)
+			stats_dwm = self.db.stats_day_week_month(tg, today)
+			month_rank = self.db.month_ranking(start_month, today)
+			comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, ai_prompt)
+			final_msg = "\n".join(lines) + "\n" + self._shape_ai_comment(comment)
+			await self.push_func(tg, final_msg)
+			# close session and log
+			try:
+				self.db.work_close(tg)
+				self.db.log(tg, "autoclose_21_sent", {"hour": 21})
+			except Exception:
+				pass 
