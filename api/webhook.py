@@ -558,3 +558,153 @@ async def scheduler_start(request: Request) -> JSONResponse:
 			return JSONResponse({"ok": True, "started": False, "already_present": True})
 	except Exception as e:
 		return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 
+
+@app.post("/api/test_autosum_13")
+async def test_autosum_13(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        payload = {}
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception:
+            payload = {}
+        tg_raw = request.query_params.get("tg_id") or str(payload.get("tg_id") or "")
+        send = (request.query_params.get("send") or str(payload.get("send") or "0")).strip().lower() in ("1","true","yes","on")
+        if not tg_raw:
+            return JSONResponse({"ok": False, "error": "missing tg_id"}, status_code=400)
+        tg = int(tg_raw)
+        # compute like scheduler autosum
+        from datetime import date, timedelta
+        today = date.today()
+        start_week = today - timedelta(days=today.weekday())
+        start_month = today.replace(day=1)
+        name = (db.get_or_register_employee(tg).agent_name if db.get_or_register_employee(tg) else f"agent?{tg}")
+        today_total, today_by = db._sum_attempts_query(tg, today, today)
+        week_total, _ = db._sum_attempts_query(tg, start_week, today)
+        month_total, _ = db._sum_attempts_query(tg, start_month, today)
+        m_day = db.meets_period_count(tg, today, today)
+        m_week = db.meets_period_count(tg, start_week, today)
+        m_month = db.meets_period_count(tg, start_month, today)
+        linked_day = db.attempts_linked_period_count(tg, today, today)
+        linked_week = db.attempts_linked_period_count(tg, start_week, today)
+        linked_month = db.attempts_linked_period_count(tg, start_month, today)
+        pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0
+        pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0
+        pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
+        pen_target = int(db.compute_plan_breakdown(tg, today).get('penetration_target_pct', 50))
+        # previous
+        start_prev_w = start_week - timedelta(days=7)
+        end_prev_w = start_week - timedelta(days=1)
+        m_prev_day = db.meets_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+        linked_prev_day = db.attempts_linked_period_count(tg, today - timedelta(days=1), today - timedelta(days=1))
+        pen_prev_day = (linked_prev_day * 100 / m_prev_day) if m_prev_day > 0 else 0
+        m_prev_week = db.meets_period_count(tg, start_prev_w, end_prev_w)
+        linked_prev_week = db.attempts_linked_period_count(tg, start_prev_w, end_prev_w)
+        pen_prev_week = (linked_prev_week * 100 / m_prev_week) if m_prev_week > 0 else 0
+        end_prev_m = start_month - timedelta(days=1)
+        start_prev_m = end_prev_m.replace(day=1)
+        m_prev_month = db.meets_period_count(tg, start_prev_m, end_prev_m)
+        linked_prev_month = db.attempts_linked_period_count(tg, start_prev_m, end_prev_m)
+        pen_prev_month = (linked_prev_month * 100 / m_prev_month) if m_prev_month > 0 else 0
+        def _dpp(a: float, b: float) -> int: return int(round(a - b))
+        d_pen_day = _dpp(int(round(pen_day)), int(round(pen_prev_day)))
+        d_pen_week = _dpp(int(round(pen_week)), int(round(pen_prev_week)))
+        d_pen_month = _dpp(int(round(pen_month)), int(round(pen_prev_month)))
+        items = [(p, c) for p, c in (today_by or {}).items() if c > 0]
+        items.sort(key=lambda x: (-x[1], x[0]))
+        breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
+        lines = []
+        lines.append(f"- Сегодня: {int(round(pen_day))}% ({today_total}шт.) факт / {pen_target}% план / {int(round((pen_day/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_day}%")
+        lines.append(f"- Сегодня по продуктам: {breakdown}")
+        lines.append(f"- Неделя: {int(round(pen_week))}% ({week_total}шт.) факт / {pen_target}% план / {int(round((pen_week/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_week}%")
+        lines.append(f"- Месяц: {int(round(pen_month))}% ({month_total}шт.) факт / {pen_target}% план / {int(round((pen_month/(pen_target if pen_target>0 else 1))*100))}% выполнение / Δ {d_pen_month}%")
+        # AI
+        from src.assistant import get_assistant_reply
+        stats_dwm = db.stats_day_week_month(tg, today)
+        month_rank = db.month_ranking(start_month, today)
+        policy = (
+            "[AUTO_SUMMARY_13]\n"
+            "Задача: оцени результаты из STATS_JSON и дай краткие рекомендации.\n"
+            "Правила: используй только числа из STATS_JSON; сфокусируйся на повышении конверсии.\n"
+        )
+        st = {"period": {"label": "День", "start": today.isoformat(), "end": today.isoformat()},
+              "current": {"day": {"cross_fact": today_total, "meet": m_day, "penetration_pct": int(round(pen_day))},
+                           "week": {"cross_fact": week_total, "meet": m_week, "penetration_pct": int(round(pen_week))},
+                           "month": {"cross_fact": month_total, "meet": m_month, "penetration_pct": int(round(pen_month))}},
+              "targets": {"penetration_target_pct": pen_target}}
+        import json as _json
+        ai_prompt = policy + "\n[STATS_JSON]\n" + _json.dumps(st, ensure_ascii=False)
+        ai = get_assistant_reply(db, tg, name, stats_dwm, month_rank, ai_prompt)
+        text = f"{name} — авто‑сводка\n" + "\n".join(lines) + "\n" + ai
+        if send:
+            await bot.send_message(tg, text)
+        return JSONResponse({"ok": True, "tg_id": tg, "text": text, "sent": send})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/test_autoclose")
+async def test_autoclose(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        payload = {}
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception:
+            payload = {}
+        tg_raw = request.query_params.get("tg_id") or str(payload.get("tg_id") or "")
+        close_flag = (request.query_params.get("close") or str(payload.get("close") or "0")).strip().lower() in ("1","true","yes","on")
+        send = (request.query_params.get("send") or str(payload.get("send") or "0")).strip().lower() in ("1","true","yes","on")
+        if not tg_raw:
+            return JSONResponse({"ok": False, "error": "missing tg_id"}, status_code=400)
+        # Reuse autosum builder then close
+        req2 = request
+        # build text via helper above (call function directly)
+        # We'll inline minimal compute (not to recurse HTTP)
+        from datetime import date, timedelta
+        today = date.today(); start_week = today - timedelta(days=today.weekday()); start_month = today.replace(day=1)
+        tg = int(tg_raw); emp = db.get_or_register_employee(tg); name = emp.agent_name if emp else f"agent?{tg}"
+        today_total, today_by = db._sum_attempts_query(tg, today, today)
+        week_total, _ = db._sum_attempts_query(tg, start_week, today)
+        month_total, _ = db._sum_attempts_query(tg, start_month, today)
+        m_day = db.meets_period_count(tg, today, today); m_week = db.meets_period_count(tg, start_week, today); m_month = db.meets_period_count(tg, start_month, today)
+        linked_day = db.attempts_linked_period_count(tg, today, today); linked_week = db.attempts_linked_period_count(tg, start_week, today); linked_month = db.attempts_linked_period_count(tg, start_month, today)
+        pen_day = (linked_day * 100 / m_day) if m_day > 0 else 0; pen_week = (linked_week * 100 / m_week) if m_week > 0 else 0; pen_month = (linked_month * 100 / m_month) if m_month > 0 else 0
+        pen_target = int(db.compute_plan_breakdown(tg, today).get('penetration_target_pct', 50))
+        items = [(p, c) for p, c in (today_by or {}).items() if c > 0]; items.sort(key=lambda x: (-x[1], x[0])); breakdown = ", ".join([f"{c}{p}" for p, c in items]) if items else "—"
+        lines = [f"- Сегодня: {int(round(pen_day))}% ({today_total}шт.) факт / {pen_target}% план / {int(round((pen_day/(pen_target if pen_target>0 else 1))*100))}% выполнение",
+                 f"- Сегодня по продуктам: — {breakdown}",
+                 f"- Неделя: {int(round(pen_week))}% ({week_total}шт.) факт / {pen_target}% план / {int(round((pen_week/(pen_target if pen_target>0 else 1))*100))}% выполнение",
+                 f"- Месяц: {int(round(pen_month))}% ({month_total}шт.) факт / {pen_target}% план / {int(round((pen_month/(pen_target if pen_target>0 else 1))*100))}% выполнение"]
+        from src.assistant import get_assistant_reply
+        stats_dwm = db.stats_day_week_month(tg, today); month_rank = db.month_ranking(start_month, today)
+        import json as _json
+        st = {"period": {"label": "День", "start": today.isoformat(), "end": today.isoformat()},
+              "current": {"day": {"cross_fact": today_total, "meet": m_day, "penetration_pct": int(round(pen_day))},
+                           "week": {"cross_fact": week_total, "meet": m_week, "penetration_pct": int(round(pen_week))},
+                           "month": {"cross_fact": month_total, "meet": m_month, "penetration_pct": int(round(pen_month))}},
+              "targets": {"penetration_target_pct": pen_target}}
+        ai_prompt = "[AUTO_CLOSE_TEST]\n[STATS_JSON]\n" + _json.dumps(st, ensure_ascii=False)
+        ai = get_assistant_reply(db, tg, name, stats_dwm, month_rank, ai_prompt)
+        text = "\n".join(lines) + "\n" + ai
+        if close_flag:
+            try:
+                db.work_close(tg)
+                db.log(tg, "autoclose_21_sent", {"test": True})
+            except Exception:
+                pass
+        if send:
+            await bot.send_message(tg, text)
+        return JSONResponse({"ok": True, "tg_id": tg, "text": text, "closed": close_flag, "sent": send})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500) 
