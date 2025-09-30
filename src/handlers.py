@@ -13,6 +13,7 @@ from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, Inli
                          KeyboardButton, Message, ReplyKeyboardMarkup)
 
 from .db import Database
+from .config import get_settings
 from .pii import sanitize_text
 from .assistant import get_assistant_reply
 
@@ -574,19 +575,28 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		if not db.is_allowed(user_id):
 			await message.answer("Доступ ограничен.")
 			return
-		if not db.work_is_open(user_id):
-			await message.answer("Начните рабочий день, чтобы пользоваться функциями", reply_markup=_kb_work_open())
-			return
 		emp = db.get_or_register_employee(user_id)
 		if not emp:
 			await message.answer("Временная ошибка базы. Повторите позже.")
 			return
-		today = date.today()
+		# Use employee timezone for personal 'today'
+		import pytz as _pytz
+		tz_name = db.get_employee_timezone(user_id)
+		try:
+			today = _pytz.timezone(tz_name).localize(datetime.now()).date()
+		except Exception:
+			today = date.today()
 		stats = db.stats_day_week_month(user_id, today)
 		plan = db.compute_plan_breakdown(user_id, today)
 		month_rank = db.month_ranking(today.replace(day=1), today)
 		pos = next((i+1 for i, r in enumerate(month_rank) if r["tg_id"] == user_id), None)
-		top2, bottom2 = db.day_top_bottom(today)
+		# Compute group Top-2 by application timezone (common reference)
+		try:
+			app_tz = _pytz.timezone(get_settings().timezone)
+			top2_date = app_tz.localize(datetime.now()).date()
+		except Exception:
+			top2_date = today
+		top2, bottom2 = db.day_top_bottom(top2_date)
 		top_str = ", ".join([r["agent_name"] for r in top2]) if top2 else "—"
 		bottom_str = ", ".join([r["agent_name"] for r in bottom2]) if bottom2 else "—"
 		day_total = int(stats['today']['total'])
