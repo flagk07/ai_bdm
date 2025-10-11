@@ -163,8 +163,8 @@ class Database:
 				res2 = self.client.table("meet").select("id").eq("tg_id", tg_id).gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
 				rows2 = getattr(res2, "data", []) or []
 				return len(rows2)
-		except Exception:
-			return 0
+			except Exception:
+				return 0
 
 	def attempts_linked_period_count(self, tg_id: int, start: date, end: date) -> int:
 		try:
