@@ -88,8 +88,8 @@ async def _set_commands() -> None:
 		except Exception:
 			pass
 	# Start scheduler unconditionally; jobs inside respect flags
-	async def push(chat_id: int, text: str) -> None:
-		await bot.send_message(chat_id, text)
+		async def push(chat_id: int, text: str) -> None:
+			await bot.send_message(chat_id, text)
 	app.state.scheduler = StatsScheduler(db, push)
 	app.state.scheduler.start()
 	try:
@@ -289,7 +289,7 @@ async def diag(request: Request) -> JSONResponse:
 		last_logs = getattr(lg, "data", []) or []
 	except Exception:
 		last_logs = []
-	return JSONResponse({"ok": True, "webhook": wh, "allowed": allowed, "employee": emp, "messages_recent": msgs, "logs": last_logs})
+	return JSONResponse({"ok": True, "webhook": wh, "allowed": allowed, "employee": emp, "messages_recent": msgs, "logs": last_logs}) 
 
 @app.get("/api/logs")
 async def logs_api(request: Request) -> JSONResponse:

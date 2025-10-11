@@ -131,14 +131,14 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		db.log(user_id, "start", {"username": message.from_user.username})
 		# Gate by work session
 		if db.work_is_open(user_id):
-			await message.answer(f"Привет, {emp.agent_name}!", reply_markup=main_keyboard())
+		await message.answer(f"Привет, {emp.agent_name}!", reply_markup=main_keyboard())
 		else:
 			await message.answer(f"Привет, {emp.agent_name}! Нажми 'Начать работу' чтобы активировать функции.", reply_markup=_kb_work_open())
 
 	@dp.message(Command("menu"))
 	async def menu_handler(message: Message) -> None:
 		if db.work_is_open(message.from_user.id):
-			await message.answer("Меню", reply_markup=main_keyboard())
+		await message.answer("Меню", reply_markup=main_keyboard())
 		else:
 			await message.answer("Меню", reply_markup=_kb_work_open())
 
@@ -618,7 +618,7 @@ def register_handlers(dp: Dispatcher, db: Database, bot: Bot, *, for_webhook: bo
 		try:
 			today = _pytz.timezone(tz_name).localize(datetime.now()).date()
 		except Exception:
-			today = date.today()
+		today = date.today()
 		stats = db.stats_day_week_month(user_id, today)
 		plan = db.compute_plan_breakdown(user_id, today)
 		month_rank = db.month_ranking(today.replace(day=1), today)

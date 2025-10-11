@@ -32,8 +32,8 @@ def _normalize_output(text: str) -> str:
 
 
 def get_assistant_reply(
-    db: Database,
-    tg_id: int,
+	db: Database,
+	tg_id: int,
     agent_name: str,
     user_stats: Dict[str, Any],
     group_month_ranking: List[Dict[str, Any]],
@@ -131,7 +131,7 @@ def get_assistant_reply(
             if role not in ("user", "assistant", "system"):
                 role = "user"
             messages.append({"role": role, "content": content})
-    except Exception:
+		except Exception:
         pass
     # Append current user message
     messages.append({"role": "user", "content": user_clean})
@@ -139,9 +139,9 @@ def get_assistant_reply(
     try:
         client = OpenAI(api_key=settings.openai_api_key)
         resp = client.chat.completions.create(
-            model=settings.assistant_model,
-            messages=messages,
-            temperature=0.5,
+		model=settings.assistant_model,
+		messages=messages,
+		temperature=0.5,
             max_tokens=400,
         )
         answer = resp.choices[0].message.content or ""
@@ -149,15 +149,15 @@ def get_assistant_reply(
         error_text = str(exc)
         try:
             db.log(tg_id, "assistant_openai_error", {"error": error_text})
-        except Exception:
-            pass
+	except Exception:
+		pass
         print(f"assistant_openai_error: {error_text}", flush=True)
         raise
     answer_clean = sanitize_text_assistant_output(answer)
     answer_clean = _normalize_output(answer_clean)
     try:
-        db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
+		db.add_assistant_message(tg_id, "user", user_clean, off_topic=False)
         db.add_assistant_message(tg_id, "assistant", answer_clean, off_topic=False)
-    except Exception:
-        pass
-    return answer_clean
+		except Exception:
+			pass
+	return answer_clean 

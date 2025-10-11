@@ -325,7 +325,7 @@ class StatsScheduler:
 			self.scheduler.add_job(self._email_report_fallback_worker, CronTrigger(minute="*"))
 		# Auto-close workday at 21:00 local time via minute worker
 		self.scheduler.add_job(self._autoclose_21_worker, CronTrigger(minute="*"))
-		self.scheduler.start()
+		self.scheduler.start() 
 
 	async def _autosum_13_worker(self) -> None:
 		"""Every minute: for each active employee, if local time is 13:00 and work is open, send autosummary once per day."""
@@ -541,7 +541,8 @@ class StatsScheduler:
 			except Exception:
 				tz = pytz.timezone(get_settings().timezone)
 			now_local = datetime.now(tz)
-			if now_local.hour != 21:
+			# Trigger at 21:00 local time or later (in case the service missed exactly 21:00)
+			if now_local.hour < 21:
 				continue
 			# dup guard: already closed today?
 			try:
