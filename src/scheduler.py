@@ -459,11 +459,27 @@ class StatsScheduler:
 			month_rank = self.db.month_ranking(start_month, today)
 			comment = get_assistant_reply(self.db, tg, name, stats_dwm, month_rank, ai_prompt)
 			final_msg = "\n".join(lines) + "\n" + self._shape_ai_comment(comment)
-			await self.push_func(tg, final_msg)
-			# close session and log
+			# Close session first; retry once on failure, then send message; log outcome
+			closed_ok = False
 			try:
 				self.db.work_close(tg)
-				self.db.log(tg, "autoclose_21_sent", {"hour": 21})
+				closed_ok = True
+			except Exception as e:
+				try:
+					self.db.log(tg, "autoclose_21_close_error", {"error": str(e)[:200]})
+				except Exception:
+					pass
+				# one more attempt
+				try:
+					self.db.work_close(tg)
+					closed_ok = True
+				except Exception:
+					pass
+			# Send message after attempting close
+			await self.push_func(tg, final_msg)
+			# Log autoclose outcome
+			try:
+				self.db.log(tg, "autoclose_21_sent", {"hour": 21, "closed": closed_ok})
 			except Exception:
 				pass 
 
