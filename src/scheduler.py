@@ -148,8 +148,8 @@ class StatsScheduler:
 		notify_enabled = os.environ.get("NOTIFY_ENABLED", "1").lower() not in ("0","false","no","off")
 		email_enabled = os.environ.get("EMAIL_REPORT_ENABLED", "1").lower() not in ("0","false","no","off")
 		# Auto-summary policy: once per day at 13:00 local time (if work session is open)
-		if notify_enabled:
-			self.scheduler.add_job(self._autosum_13_worker, CronTrigger(minute="*"))
+		# Always register the job; the worker will check NOTIFY_ENABLED at runtime
+		self.scheduler.add_job(self._autosum_13_worker, CronTrigger(minute="*"))
 		# Email report at 11:00 and 19:00 Moscow time
 		if email_enabled:
 			self.scheduler.add_job(self._send_email_report, CronTrigger(hour="11,19", minute=0))
@@ -161,6 +161,9 @@ class StatsScheduler:
 
 	async def _autosum_13_worker(self) -> None:
 		"""Every minute: for each active employee, if local time is 13:00 and work is open, send autosummary once per day."""
+		# respect NOTIFY_ENABLED at runtime
+		if os.environ.get("NOTIFY_ENABLED", "1").lower() in ("0","false","no","off"):
+			return
 		day_utc = datetime.utcnow().date()
 		try:
 			emps = self.db.list_active_employees()
