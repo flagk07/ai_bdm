@@ -278,8 +278,15 @@ class StatsScheduler:
 		start_month = day.replace(day=1)
 		rows: List[Dict[str, object]] = []
 		rec = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
+		# Exclude test agents by name
+		TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
 		for r in (getattr(rec, "data", []) or []):
 			tg = int(r["tg_id"]); name = r.get("agent_name") or f"agent?{tg}"
+			try:
+				if isinstance(name, str) and (name.strip().lower() in TEST_NAMES):
+					continue
+			except Exception:
+				pass
 			# meets
 			m_day = self.db.meets_period_count(tg, day, day)
 			m_month = self.db.meets_period_count(tg, start_month, day)

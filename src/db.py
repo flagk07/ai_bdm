@@ -175,6 +175,8 @@ class Database:
 			return 0
 
 	def group_ranking_period(self, start: date, end: date) -> List[Dict[str, Any]]:
+		# Helper: test names to exclude from group stats
+		TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
 		res = self.client.table("attempts").select("tg_id, attempt_count").gte("for_date", start.isoformat()).lte("for_date", end.isoformat()).execute()
 		sums: Dict[int, int] = {}
 		for row in getattr(res, "data", []) or []:
@@ -184,9 +186,13 @@ class Database:
 		if sums:
 			ids = list(sums.keys())
 			emp = self.client.table("employees").select("tg_id, agent_name, active").in_("tg_id", ids).eq("active", True).execute()
-			id_to_name = {int(r["tg_id"]): r["agent_name"] for r in (getattr(emp, "data", []) or [])}
+			id_to_name = {int(r["tg_id"]): (r.get("agent_name") or "") for r in (getattr(emp, "data", []) or [])}
 			for tg_id, total in sums.items():
-				ranking.append((tg_id, id_to_name.get(tg_id, f"agent?{tg_id}"), total))
+				name = id_to_name.get(tg_id, f"agent?{tg_id}")
+				# skip test agents by name
+				if isinstance(name, str) and name.strip().lower() in TEST_NAMES:
+					continue
+				ranking.append((tg_id, name, total))
 		ranking.sort(key=lambda x: x[2], reverse=True)
 		return [{"tg_id": tg, "agent_name": name, "total": total} for tg, name, total in ranking]
 
@@ -301,6 +307,7 @@ class Database:
 		}
 
 	def month_ranking(self, month_first_day: date, today: date) -> List[Dict[str, Any]]:
+		TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
 		res = self.client.table("attempts").select("tg_id, attempt_count").gte("for_date", month_first_day.isoformat()).lte("for_date", today.isoformat()).execute()
 		sums: Dict[int, int] = {}
 		for row in getattr(res, "data", []) or []:
@@ -310,13 +317,17 @@ class Database:
 		if sums:
 			ids = list(sums.keys())
 			emp = self.client.table("employees").select("tg_id, agent_name, active").in_("tg_id", ids).eq("active", True).execute()
-			id_to_name = {int(r["tg_id"]): r["agent_name"] for r in (getattr(emp, "data", []) or [])}
+			id_to_name = {int(r["tg_id"]): (r.get("agent_name") or "") for r in (getattr(emp, "data", []) or [])}
 			for tg_id, total in sums.items():
-				ranking.append((tg_id, id_to_name.get(tg_id, f"agent?{tg_id}"), total))
+				name = id_to_name.get(tg_id, f"agent?{tg_id}")
+				if isinstance(name, str) and name.strip().lower() in TEST_NAMES:
+					continue
+				ranking.append((tg_id, name, total))
 		ranking.sort(key=lambda x: x[2], reverse=True)
 		return [{"tg_id": tg, "agent_name": name, "total": total} for tg, name, total in ranking]
 
 	def day_top_bottom(self, day: date) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+		TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
 		res = self.client.table("attempts").select("tg_id, attempt_count").eq("for_date", day.isoformat()).execute()
 		sums: Dict[int, int] = {}
 		for row in getattr(res, "data", []) or []:
@@ -326,8 +337,15 @@ class Database:
 			return [], []
 		ids = list(sums.keys())
 		emp = self.client.table("employees").select("tg_id, agent_name, active").in_("tg_id", ids).eq("active", True).execute()
-		id_to_name = {int(r["tg_id"]): r["agent_name"] for r in (getattr(emp, "data", []) or [])}
-		pairs = [(tg, id_to_name.get(tg, f"agent?{tg}"), total) for tg, total in sums.items()]
+		id_to_name = {int(r["tg_id"]): (r.get("agent_name") or "") for r in (getattr(emp, "data", []) or [])}
+		pairs = []
+		for tg, total in sums.items():
+			name = id_to_name.get(tg, f"agent?{tg}")
+			if isinstance(name, str) and name.strip().lower() in TEST_NAMES:
+				continue
+			pairs.append((tg, name, total))
+		if not pairs:
+			return [], []
 		pairs.sort(key=lambda x: x[2], reverse=True)
 		top2 = pairs[:2]
 		bottom2 = pairs[-2:] if len(pairs) >= 2 else pairs
