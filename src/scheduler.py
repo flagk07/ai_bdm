@@ -260,9 +260,7 @@ class StatsScheduler:
 				pass
 
 	async def _send_email_report(self) -> None:
-		# TEMP: route standard report to usability report to ensure delivery
-		await self._send_usability_report()
-		return
+		# Build and send USABILITY report (requested format), but keep the same endpoint
 		settings = get_settings()
 		if not settings.smtp_host or not settings.smtp_user or not settings.smtp_pass:
 			try:
@@ -270,101 +268,118 @@ class StatsScheduler:
 			except Exception:
 				pass
 			return
-		# ensure recipient is set
 		if not getattr(settings, "email_to_csv", ""):
 			try:
 				self.db.log(None, "email_report_skip", {"reason": "recipient_not_set"})
 			except Exception:
 				pass
 			return
-		# gather data
-		day = date.today()
-		start_week = day - timedelta(days=day.weekday())
-		start_month = day.replace(day=1)
-		rows: List[Dict[str, object]] = []
-		rec = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
-		# Exclude test agents by name
-		TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
-		for r in (getattr(rec, "data", []) or []):
-			tg = int(r["tg_id"]); name = r.get("agent_name") or f"agent?{tg}"
-			try:
-				if isinstance(name, str) and (name.strip().lower() in TEST_NAMES):
-					continue
-			except Exception:
-				pass
-			# meets
-			m_day = self.db.meets_period_count(tg, day, day)
-			m_month = self.db.meets_period_count(tg, start_month, day)
-			# cross attempts
-			t_day, _ = self.db._sum_attempts_query(tg, day, day)
-			t_month, _ = self.db._sum_attempts_query(tg, start_month, day)
-			# penetration and completion (vs target)
-			pen_day = (t_day * 100 / m_day) if m_day > 0 else 0
-			pen_month = (t_month * 100 / m_month) if m_month > 0 else 0
-			target = int(self.db.compute_plan_breakdown(tg, day).get("penetration_target_pct", 50))
-			compl_day = int(round((pen_day / (target if target > 0 else 1)) * 100))
-			compl_month = int(round((pen_month / (target if target > 0 else 1)) * 100))
-			rows.append({
-				"tg_id": tg,
-				"Агент": name,
-				"Встречи (день)": m_day,
-				"Встречи (месяц)": m_month,
-				"Кросс (день)": t_day,
-				"Кросс (месяц)": t_month,
-				"Проникновение % (день)": int(round(pen_day)),
-				"Проникновение % (месяц)": int(round(pen_month)),
-				"Выполнение % (день)": compl_day,
-				"Выполнение % (месяц)": compl_month,
-			})
-		# build XLSX bytes
-		buf = io.BytesIO()
+		# recipients come from settings (we already set to two emails at runtime)
+		recipients = [addr.strip() for addr in str(settings.email_to_csv).split(',') if addr.strip()]
+		# compute metrics using MSK time and exclude test agents
 		try:
+			msk = pytz.timezone("Europe/Moscow")
+			today = datetime.now(msk).date()
+			start_week = today - timedelta(days=today.weekday())
+			start_month = today.replace(day=1)
+			TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
+			res = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
+			emps = [r for r in (getattr(res, "data", []) or []) if (str((r.get("agent_name") or "")).strip().lower() not in TEST_NAMES)]
+			n_emps = max(1, len(emps))
+			ids = [int(r["tg_id"]) for r in emps]
+			def _utc_bounds(start: date, end: date) -> tuple[str, str]:
+				start_dt = msk.localize(datetime.combine(start, datetime.min.time())).astimezone(pytz.UTC)
+				end_dt = msk.localize(datetime.combine(end, datetime.max.time())).astimezone(pytz.UTC)
+				return start_dt.isoformat(), end_dt.isoformat()
+			def _count_logs(start: date, end: date, tg_id: int | None = None) -> int:
+				lo, hi = _utc_bounds(start, end)
+				q = self.db.client.table("logs").select("id").gte("created_at", lo).lte("created_at", hi)
+				if tg_id is not None:
+					q = q.eq("tg_id", tg_id)
+				elif ids:
+					q = q.in_("tg_id", ids)  # type: ignore
+				res = q.execute(); return len(getattr(res, "data", []) or [])
+			def _count_ai_messages(start: date, end: date, tg_id: int | None = None) -> int:
+				lo, hi = _utc_bounds(start, end)
+				q = self.db.client.table("assistant_messages").select("id").gte("created_at", lo).lte("created_at", hi).eq("role", "user")
+				if tg_id is not None:
+					q = q.eq("tg_id", tg_id)
+				elif ids:
+					q = q.in_("tg_id", ids)  # type: ignore
+				res = q.execute(); return len(getattr(res, "data", []) or [])
+			def _unique_users(start: date, end: date) -> int:
+				lo, hi = _utc_bounds(start, end)
+				q = self.db.client.table("logs").select("tg_id").gte("created_at", lo).lte("created_at", hi)
+				if ids:
+					q = q.in_("tg_id", ids)  # type: ignore
+				res = q.execute(); s = {int(r["tg_id"]) for r in (getattr(res, "data", []) or []) if r.get("tg_id")}
+				return len(s)
+			periods = [("День", today, today), ("Неделя", start_week, today), ("Месяц", start_month, today)]
+			rows_summary: List[Dict[str, object]] = []
+			rows_users: List[Dict[str, object]] = []
+			for label, start, end in periods:
+				logs_total = _count_logs(start, end, None)
+				ai_total = _count_ai_messages(start, end, None)
+				uniq = _unique_users(start, end)
+				rows_summary.append({
+					"Период": label,
+					"Логи всего": logs_total,
+					"ИИ-запросов всего": ai_total,
+					"Подключенных сотрудников": len(emps),
+					"Частота логов на 1 сотрудника": round(logs_total / n_emps, 2),
+					"Частота ИИ на 1 сотрудника": round(ai_total / n_emps, 2),
+					"Уникальные пользователи": uniq,
+					"Уникальные, % от всех": int(round((uniq * 100) / max(1, len(emps))))
+				})
+			for r in emps:
+				uid = int(r["tg_id"]); name = r.get("agent_name") or f"agent?{uid}"
+				rows_users.append({
+					"Агент": name,
+					"Логи (день)": _count_logs(today, today, uid),
+					"Логи (неделя)": _count_logs(start_week, today, uid),
+					"Логи (месяц)": _count_logs(start_month, today, uid),
+					"ИИ (день)": _count_ai_messages(today, today, uid),
+					"ИИ (неделя)": _count_ai_messages(start_week, today, uid),
+					"ИИ (месяц)": _count_ai_messages(start_month, today, uid),
+				})
+			# Build XLSX
+			buf = io.BytesIO(); filename = f"usability_{today.isoformat()}.xlsx"; ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 			if pd is not None:
-				df = pd.DataFrame(rows)
-				df.to_excel(buf, index=False)
-				filename = f"report_{day.isoformat()}.xlsx"
-				ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+				with pd.ExcelWriter(buf, engine="openpyxl") as writer:  # type: ignore
+					pd.DataFrame(rows_summary).to_excel(writer, index=False, sheet_name="Сводка")
+					pd.DataFrame(rows_users).to_excel(writer, index=False, sheet_name="По сотрудникам")
+				buf.seek(0)
 			else:
-				# fallback to CSV
 				import csv
-				filename = f"report_{day.isoformat()}.csv"
-				ctype = "text/csv"
-				w = io.StringIO()
-				writer = csv.DictWriter(w, fieldnames=list(rows[0].keys()) if rows else [])
-				writer.writeheader()
-				for rr in rows: writer.writerow(rr)
-				buf = io.BytesIO(w.getvalue().encode("utf-8-sig"))
-		except Exception as e:
-			try:
-				self.db.log(None, "email_report_build_error", {"error": str(e)})
-			except Exception:
-				pass
-			return
-		# send email
-		try:
-			msg = EmailMessage()
-			msg["From"] = settings.email_from
-			msg["To"] = settings.email_to_csv
-			msg["Subject"] = f"AI BDM отчёт {day.isoformat()}"
-			msg.set_content("Автоматический отчёт во вложении.")
+				w = io.StringIO(); cw = csv.writer(w)
+				cw.writerow(["Сводка"])
+				if rows_summary:
+					cw.writerow(list(rows_summary[0].keys()))
+					for rr in rows_summary: cw.writerow(list(rr.values()))
+				cw.writerow([]); cw.writerow(["По сотрудникам"])
+				if rows_users:
+					cw.writerow(list(rows_users[0].keys()))
+					for rr in rows_users: cw.writerow(list(rr.values()))
+				buf = io.BytesIO(w.getvalue().encode("utf-8-sig")); filename = filename.replace(".xlsx", ".csv"); ctype = "text/csv"
+			# Send email
+			msg = EmailMessage(); msg["From"] = settings.email_from; msg["To"] = settings.email_to_csv
+			msg["Subject"] = f"AI BDM usability {today.isoformat()}"
+			msg.set_content("Отчёт по юзабилити во вложении.")
 			msg.add_attachment(buf.getvalue(), maintype=ctype.split('/')[0], subtype=ctype.split('/')[1], filename=filename)
 			if getattr(settings, "smtp_ssl", False):
 				s = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port)
 			else:
-				s = smtplib.SMTP(settings.smtp_host, settings.smtp_port)
-				s.starttls()
-			s.login(settings.smtp_user, settings.smtp_pass)
-			s.send_message(msg)
-			s.quit()
+				s = smtplib.SMTP(settings.smtp_host, settings.smtp_port); s.starttls()
+			s.login(settings.smtp_user, settings.smtp_pass); s.send_message(msg); s.quit()
 			try:
-				self.db.log(None, "email_report_sent", {"to": settings.email_to_csv, "filename": filename, "rows": len(rows)})
+				self.db.log(None, "email_report_sent", {"to": settings.email_to_csv, "filename": filename, "rows": len(rows_users)})
 			except Exception:
 				pass
 		except Exception as e:
 			try:
 				self.db.log(None, "email_report_send_error", {"error": str(e)})
 			except Exception:
-				pass 
+				pass
 
 	async def _autoclose_21_worker(self) -> None:
 		"""Every minute: for each active employee, if local time is 21:00 and work is open, close and send end-of-day with STATS_JSON once per day."""
