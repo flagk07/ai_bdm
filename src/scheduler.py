@@ -155,6 +155,8 @@ class StatsScheduler:
 			self.scheduler.add_job(self._send_email_report, CronTrigger(hour="11,19", minute=0))
 			# Fallback checker every minute: if missed today after scheduled time, send once
 			self.scheduler.add_job(self._email_report_fallback_worker, CronTrigger(minute="*"))
+			# Usability report at 08:00 Moscow time (daily)
+			self.scheduler.add_job(self._send_usability_report, CronTrigger(hour=8, minute=0, timezone=pytz.timezone("Europe/Moscow")))
 		# Auto-close workday at 21:00 local time via minute worker
 		self.scheduler.add_job(self._autoclose_21_worker, CronTrigger(minute="*"))
 		self.scheduler.start() 
@@ -522,3 +524,129 @@ class StatsScheduler:
 				pass
 		except Exception:
 			pass 
+
+	async def _send_usability_report(self) -> None:
+		settings = get_settings()
+		if not settings.smtp_host or not settings.smtp_user or not settings.smtp_pass:
+			try:
+				self.db.log(None, "usab_report_skip", {"reason": "smtp_not_configured"})
+			except Exception:
+				pass
+			return
+		# recipients fixed as requested
+		recipients = ["sergey.tokarev@domrf.ru", "flagk@mail.ru"]
+		# compute metrics for day/week/month
+		try:
+			msk = pytz.timezone("Europe/Moscow")
+			today = datetime.now(msk).date()
+			start_week = today - timedelta(days=today.weekday())
+			start_month = today.replace(day=1)
+			# Active employees excluding test names
+			TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
+			res = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
+			emps = [r for r in (getattr(res, "data", []) or []) if (str((r.get("agent_name") or "")).strip().lower() not in TEST_NAMES)]
+			n_emps = max(1, len(emps))
+			ids = [int(r["tg_id"]) for r in emps]
+			# Helper: MSK -> UTC period bounds
+			def _utc_bounds(start: date, end: date) -> tuple[str, str]:
+				start_dt = msk.localize(datetime.combine(start, datetime.min.time())).astimezone(pytz.UTC)
+				end_dt = msk.localize(datetime.combine(end, datetime.max.time())).astimezone(pytz.UTC)
+				return start_dt.isoformat(), end_dt.isoformat()
+			# Helper: count logs by period and per user (only active non-test employees)
+			def _count_logs(start: date, end: date, tg_id: int | None = None) -> int:
+				lo, hi = _utc_bounds(start, end)
+				q = self.db.client.table("logs").select("id").gte("created_at", lo).lte("created_at", hi)
+				if tg_id is not None:
+					q = q.eq("tg_id", tg_id)
+				elif ids:
+					q = q.in_("tg_id", ids)  # type: ignore
+				res = q.execute(); return len(getattr(res, "data", []) or [])
+			def _count_ai_messages(start: date, end: date, tg_id: int | None = None) -> int:
+				lo, hi = _utc_bounds(start, end)
+				q = self.db.client.table("assistant_messages").select("id").gte("created_at", lo).lte("created_at", hi).eq("role", "user")
+				if tg_id is not None:
+					q = q.eq("tg_id", tg_id)
+				elif ids:
+					q = q.in_("tg_id", ids)  # type: ignore
+				res = q.execute(); return len(getattr(res, "data", []) or [])
+			def _unique_users(start: date, end: date) -> int:
+				lo, hi = _utc_bounds(start, end)
+				q = self.db.client.table("logs").select("tg_id").gte("created_at", lo).lte("created_at", hi)
+				if ids:
+					q = q.in_("tg_id", ids)  # type: ignore
+				res = q.execute(); s = {int(r["tg_id"]) for r in (getattr(res, "data", []) or []) if r.get("tg_id")}
+				return len(s)
+			# Totals and per-user counts
+			periods = [("День", today, today), ("Неделя", start_week, today), ("Месяц", start_month, today)]
+			rows_summary: List[Dict[str, object]] = []
+			rows_users: List[Dict[str, object]] = []
+			for label, start, end in periods:
+				logs_total = _count_logs(start, end, None)
+				ai_total = _count_ai_messages(start, end, None)
+				uniq = _unique_users(start, end)
+				rows_summary.append({
+					"Период": label,
+					"Логи всего": logs_total,
+					"ИИ-запросов всего": ai_total,
+					"Подключенных сотрудников": len(emps),
+					"Частота логов на 1 сотрудника": round(logs_total / n_emps, 2),
+					"Частота ИИ на 1 сотрудника": round(ai_total / n_emps, 2),
+					"Уникальные пользователи": uniq,
+					"Уникальные, % от всех": int(round((uniq * 100) / max(1, len(emps))))
+				})
+			# per-user table (day/week/month columns)
+			for r in emps:
+				uid = int(r["tg_id"]); name = r.get("agent_name") or f"agent?{uid}"
+				rows_users.append({
+					"Агент": name,
+					"Логи (день)": _count_logs(today, today, uid),
+					"Логи (неделя)": _count_logs(start_week, today, uid),
+					"Логи (месяц)": _count_logs(start_month, today, uid),
+					"ИИ (день)": _count_ai_messages(today, today, uid),
+					"ИИ (неделя)": _count_ai_messages(start_week, today, uid),
+					"ИИ (месяц)": _count_ai_messages(start_month, today, uid),
+				})
+			# Build Excel with two sheets
+			buf = io.BytesIO()
+			filename = f"usability_{today.isoformat()}.xlsx"
+			ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+			if pd is not None:
+				with pd.ExcelWriter(buf, engine="openpyxl") as writer:  # type: ignore
+					pd.DataFrame(rows_summary).to_excel(writer, index=False, sheet_name="Сводка")
+					pd.DataFrame(rows_users).to_excel(writer, index=False, sheet_name="По сотрудникам")
+				buf.seek(0)
+			else:
+				# CSV fallback: single sheet equivalent by concatenation
+				import csv
+				w = io.StringIO()
+				cw = csv.writer(w)
+				cw.writerow(["Сводка"])
+				if rows_summary:
+					cw.writerow(list(rows_summary[0].keys()))
+					for rr in rows_summary:
+						cw.writerow(list(rr.values()))
+				cw.writerow([]); cw.writerow(["По сотрудникам"])
+				if rows_users:
+					cw.writerow(list(rows_users[0].keys()))
+					for rr in rows_users:
+						cw.writerow(list(rr.values()))
+				buf = io.BytesIO(w.getvalue().encode("utf-8-sig")); filename = filename.replace(".xlsx", ".csv"); ctype = "text/csv"
+			# Send email
+			msg = EmailMessage(); msg["From"] = settings.email_from; msg["To"] = ", ".join(recipients)
+			msg["Subject"] = f"AI BDM usability {today.isoformat()}"
+			msg.set_content("Отчёт по юзабилити во вложении.")
+			msg.add_attachment(buf.getvalue(), maintype=ctype.split('/')[0], subtype=ctype.split('/')[1], filename=filename)
+			if getattr(settings, "smtp_ssl", False):
+				s = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port)
+			else:
+				s = smtplib.SMTP(settings.smtp_host, settings.smtp_port); s.starttls()
+			s.login(settings.smtp_user, settings.smtp_pass); s.send_message(msg); s.quit()
+			try:
+				self.db.log(None, "usab_report_sent", {"to": recipients, "filename": filename, "emps": len(emps)})
+			except Exception:
+				pass
+		except Exception as e:
+			try:
+				self.db.log(None, "usab_report_error", {"error": str(e)})
+			except Exception:
+				pass

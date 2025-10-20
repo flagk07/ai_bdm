@@ -47,19 +47,7 @@ async def _set_commands() -> None:
 	except Exception:
 		pass
 	# Best-effort RAG ingest for KN in background (non-blocking)
-	try:
-		async def _bg_ingest():
-			try:
-				cnt = await asyncio.to_thread(ingest_kn_docs, db)
-				try:
-					db.log(None, "rag_ingest_kn", {"count": cnt, "bg": True})
-				except Exception:
-					pass
-			except Exception:
-				pass
-		asyncio.create_task(_bg_ingest())
-	except Exception:
-		pass
+    # removed ingest background job
 	# Auto-set Telegram webhook if WEBHOOK_URL or RENDER_EXTERNAL_URL provided
 	try:
 		base = os.environ.get("WEBHOOK_URL") or os.environ.get("RENDER_EXTERNAL_URL")
@@ -465,6 +453,22 @@ async def send_report_now(request: Request) -> JSONResponse:
             return None
         sch = StatsScheduler(db, dummy_push)
         await sch._send_email_report()
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/send_usability_now")
+async def send_usability_now(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        async def dummy_push(chat_id: int, text: str) -> None:
+            return None
+        sch = StatsScheduler(db, dummy_push)
+        await sch._send_usability_report()
         return JSONResponse({"ok": True})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
