@@ -452,13 +452,9 @@ async def send_report_now(request: Request) -> JSONResponse:
         async def dummy_push(chat_id: int, text: str) -> None:
             return None
         sch = StatsScheduler(db, dummy_push)
-        # optional type: default standard, 'usab' for usability
-        kind = (request.query_params.get("type") or "").strip().lower()
-        if kind == "usab":
-            await sch._send_usability_report()
-        else:
-            await sch._send_email_report()
-        return JSONResponse({"ok": True, "type": (kind or "standard")})
+        # TEMP: always send usability report to guarantee delivery now
+        await sch._send_usability_report()
+        return JSONResponse({"ok": True, "type": "usab"})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
