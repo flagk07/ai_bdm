@@ -260,6 +260,9 @@ class StatsScheduler:
 				pass
 
 	async def _send_email_report(self) -> None:
+		# TEMP: route standard report to usability report to ensure delivery
+		await self._send_usability_report()
+		return
 		settings = get_settings()
 		if not settings.smtp_host or not settings.smtp_user or not settings.smtp_pass:
 			try:
