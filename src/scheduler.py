@@ -155,8 +155,8 @@ class StatsScheduler:
 			self.scheduler.add_job(self._send_email_report, CronTrigger(hour="11,19", minute=0))
 			# Fallback checker every minute: if missed today after scheduled time, send once
 			self.scheduler.add_job(self._email_report_fallback_worker, CronTrigger(minute="*"))
-			# Usability report at 08:00 Moscow time (daily)
-			self.scheduler.add_job(self._send_usability_report, CronTrigger(hour=8, minute=0, timezone=pytz.timezone("Europe/Moscow")))
+		# Usability report at 08:00 Moscow time (daily) — always register
+		self.scheduler.add_job(self._send_usability_report, CronTrigger(hour=8, minute=0, timezone=pytz.timezone("Europe/Moscow")))
 		# Auto-close workday at 21:00 local time via minute worker
 		self.scheduler.add_job(self._autoclose_21_worker, CronTrigger(minute="*"))
 		self.scheduler.start() 
