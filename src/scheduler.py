@@ -624,24 +624,24 @@ class StatsScheduler:
 					"ИИ (неделя)": _count_ai_messages(start_week, today, uid),
 					"ИИ (месяц)": _count_ai_messages(start_month, today, uid),
 				})
-			# Build daily usage pivot since first employee connect date
+			# Build daily usage pivot since FIRST non-test employee connect date (any status)
 			first_date = today
-			for r in emps:
-				try:
-					created = r.get("created_at")
+			try:
+				res_all = self.db.client.table("employees").select("tg_id, agent_name, created_at").execute()
+				for rr in (getattr(res_all, "data", []) or []):
+					name = (rr.get("agent_name") or "").strip().lower()
+					if name in TEST_NAMES:
+						continue
+					created = rr.get("created_at")
 					if created:
 						dt = datetime.fromisoformat(str(created).replace("Z", "+00:00")).astimezone(msk)
 						fd = dt.date()
 						if fd < first_date:
 							first_date = fd
-				except Exception:
-					pass
-			# Fallback: limit to 60 days if no earlier date found
+			except Exception:
+				pass
 			if first_date > today:
 				first_date = today
-			if (today - first_date).days > 365*3:
-				# guard extremely long ranges
-				first_date = today - timedelta(days=365*3)
 			lo, hi = _utc_bounds(first_date, today)
 			logs_res = self.db.client.table("logs").select("tg_id, created_at").gte("created_at", lo).lte("created_at", hi).execute()
 			emp_map = {int(r["tg_id"]): (r.get("agent_name") or f"agent?{r['tg_id']}") for r in emps}
