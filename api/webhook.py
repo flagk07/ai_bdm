@@ -76,8 +76,8 @@ async def _set_commands() -> None:
 		except Exception:
 			pass
 	# Start scheduler unconditionally; jobs inside respect flags
-		async def push(chat_id: int, text: str) -> None:
-			await bot.send_message(chat_id, text)
+	async def push(chat_id: int, text: str) -> None:
+		await bot.send_message(chat_id, text)
 	app.state.scheduler = StatsScheduler(db, push)
 	app.state.scheduler.start()
 	try:
