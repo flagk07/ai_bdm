@@ -626,11 +626,20 @@ class StatsScheduler:
 				})
 			# Build daily usage pivot since FIRST non-test employee connect date (any status)
 			first_date = today
+			ids_all: List[int] = []
+			emp_all_map: Dict[int, str] = {}
 			try:
 				res_all = self.db.client.table("employees").select("tg_id, agent_name, created_at").execute()
-				for rr in (getattr(res_all, "data", []) or []):
+				all_rows = (getattr(res_all, "data", []) or [])
+				for rr in all_rows:
 					name = (rr.get("agent_name") or "").strip().lower()
 					if name in TEST_NAMES:
+						continue
+					try:
+						tid = int(rr.get("tg_id"))
+						emp_all_map[tid] = rr.get("agent_name") or f"agent?{tid}"
+						ids_all.append(tid)
+					except Exception:
 						continue
 					created = rr.get("created_at")
 					if created:
@@ -640,16 +649,46 @@ class StatsScheduler:
 							first_date = fd
 			except Exception:
 				pass
+			# Also check earliest log across non-test employees
+			try:
+				if ids_all:
+					q_first = (
+						self.db.client.table("logs")
+						.select("created_at, tg_id")
+						.in_("tg_id", ids_all)  # type: ignore
+						.order("created_at")
+						.limit(1)
+					)
+					res_first = q_first.execute()
+					rows_first = (getattr(res_first, "data", []) or [])
+					if rows_first:
+						dt0 = datetime.fromisoformat(str(rows_first[0].get("created_at")).replace("Z", "+00:00")).astimezone(msk)
+						if dt0.date() < first_date:
+							first_date = dt0.date()
+			except Exception:
+				pass
 			if first_date > today:
 				first_date = today
 			lo, hi = _utc_bounds(first_date, today)
-			logs_res = self.db.client.table("logs").select("tg_id, created_at").gte("created_at", lo).lte("created_at", hi).execute()
-			emp_map = {int(r["tg_id"]): (r.get("agent_name") or f"agent?{r['tg_id']}") for r in emps}
+			# Limit logs to non-test employees if possible
+			if ids_all:
+				logs_res = (
+					self.db.client.table("logs")
+					.select("tg_id, created_at")
+					.in_("tg_id", ids_all)  # type: ignore
+					.gte("created_at", lo)
+					.lte("created_at", hi)
+					.execute()
+				)
+			else:
+				logs_res = self.db.client.table("logs").select("tg_id, created_at").gte("created_at", lo).lte("created_at", hi).execute()
+			# For daily sheet, use all connected employees (non-test), not only active
+			emp_map = emp_all_map if emp_all_map else {int(r["tg_id"]): (r.get("agent_name") or f"agent?{r['tg_id']}") for r in emps}
 			daily_counts: Dict[date, Dict[int, int]] = {}
 			for row in (getattr(logs_res, "data", []) or []):
 				try:
 					tg = int(row.get("tg_id")) if row.get("tg_id") is not None else None
-					if (tg is None) or (tg not in ids):
+					if (tg is None) or ((ids_all and tg not in ids_all)):
 						continue
 					cdt = datetime.fromisoformat(str(row.get("created_at")).replace("Z", "+00:00")).astimezone(msk)
 					cd = cdt.date()
@@ -663,7 +702,7 @@ class StatsScheduler:
 			rows_days: List[Dict[str, object]] = []
 			cur = first_date
 			# ordered list of employees (by name) for stable columns
-			ordered = sorted([(tid, emp_map[tid]) for tid in ids], key=lambda x: x[1])
+			ordered = sorted([(tid, emp_map[tid]) for tid in (ids_all if ids_all else ids)], key=lambda x: x[1])
 			while cur <= today:
 				row: Dict[str, object] = {"Дата": cur.isoformat()}
 				per = daily_counts.get(cur, {})
