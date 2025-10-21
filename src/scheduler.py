@@ -283,7 +283,7 @@ class StatsScheduler:
 			start_week = today - timedelta(days=today.weekday())
 			start_month = today.replace(day=1)
 			TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
-			res = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
+			res = self.db.client.table("employees").select("tg_id, agent_name, active, created_at").eq("active", True).execute()
 			emps = [r for r in (getattr(res, "data", []) or []) if (str((r.get("agent_name") or "")).strip().lower() not in TEST_NAMES)]
 			n_emps = max(1, len(emps))
 			ids = [int(r["tg_id"]) for r in emps]
@@ -624,7 +624,54 @@ class StatsScheduler:
 					"ИИ (неделя)": _count_ai_messages(start_week, today, uid),
 					"ИИ (месяц)": _count_ai_messages(start_month, today, uid),
 				})
-			# Build Excel with two sheets
+			# Build daily usage pivot since first employee connect date
+			first_date = today
+			for r in emps:
+				try:
+					created = r.get("created_at")
+					if created:
+						dt = datetime.fromisoformat(str(created).replace("Z", "+00:00")).astimezone(msk)
+						fd = dt.date()
+						if fd < first_date:
+							first_date = fd
+				except Exception:
+					pass
+			# Fallback: limit to 60 days if no earlier date found
+			if first_date > today:
+				first_date = today
+			if (today - first_date).days > 365*3:
+				# guard extremely long ranges
+				first_date = today - timedelta(days=365*3)
+			lo, hi = _utc_bounds(first_date, today)
+			logs_res = self.db.client.table("logs").select("tg_id, created_at").gte("created_at", lo).lte("created_at", hi).execute()
+			emp_map = {int(r["tg_id"]): (r.get("agent_name") or f"agent?{r['tg_id']}") for r in emps}
+			daily_counts: Dict[date, Dict[int, int]] = {}
+			for row in (getattr(logs_res, "data", []) or []):
+				try:
+					tg = int(row.get("tg_id")) if row.get("tg_id") is not None else None
+					if (tg is None) or (tg not in ids):
+						continue
+					cdt = datetime.fromisoformat(str(row.get("created_at")).replace("Z", "+00:00")).astimezone(msk)
+					cd = cdt.date()
+					d = daily_counts.get(cd)
+					if not d:
+						d = {}
+						daily_counts[cd] = d
+					d[tg] = d.get(tg, 0) + 1
+				except Exception:
+					continue
+			rows_days: List[Dict[str, object]] = []
+			cur = first_date
+			# ordered list of employees (by name) for stable columns
+			ordered = sorted([(tid, emp_map[tid]) for tid in ids], key=lambda x: x[1])
+			while cur <= today:
+				row: Dict[str, object] = {"Дата": cur.isoformat()}
+				per = daily_counts.get(cur, {})
+				for tid, name in ordered:
+					row[name] = int(per.get(tid, 0))
+				rows_days.append(row)
+				cur += timedelta(days=1)
+			# Build Excel with three sheets
 			buf = io.BytesIO()
 			filename = f"usability_{today.isoformat()}.xlsx"
 			ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -632,6 +679,7 @@ class StatsScheduler:
 				with pd.ExcelWriter(buf, engine="openpyxl") as writer:  # type: ignore
 					pd.DataFrame(rows_summary).to_excel(writer, index=False, sheet_name="Сводка")
 					pd.DataFrame(rows_users).to_excel(writer, index=False, sheet_name="По сотрудникам")
+					pd.DataFrame(rows_days).to_excel(writer, index=False, sheet_name="По дням")
 				buf.seek(0)
 			else:
 				# CSV fallback: single sheet equivalent by concatenation
@@ -647,6 +695,11 @@ class StatsScheduler:
 				if rows_users:
 					cw.writerow(list(rows_users[0].keys()))
 					for rr in rows_users:
+						cw.writerow(list(rr.values()))
+				cw.writerow([]); cw.writerow(["По дням"])
+				if rows_days:
+					cw.writerow(list(rows_days[0].keys()))
+					for rr in rows_days:
 						cw.writerow(list(rr.values()))
 				buf = io.BytesIO(w.getvalue().encode("utf-8-sig")); filename = filename.replace(".xlsx", ".csv"); ctype = "text/csv"
 			# Send email
