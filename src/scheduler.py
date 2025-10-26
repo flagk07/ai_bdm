@@ -21,6 +21,8 @@ try:
 except Exception:
     pd = None
 
+# deploy bump: ensure latest commit triggers Render auto-deploy
+
 
 class StatsScheduler:
 	def __init__(self, db: Database, push_func: Callable[[int, str], None]):
