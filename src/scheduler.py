@@ -152,9 +152,9 @@ class StatsScheduler:
 		# Auto-summary policy: once per day at 13:00 local time (if work session is open)
 		# Always register the job; the worker will check NOTIFY_ENABLED at runtime
 		self.scheduler.add_job(self._autosum_13_worker, CronTrigger(minute="*"))
-		# Email report at 11:00 and 19:00 Moscow time
+		# Results report at 11:00 Moscow time
 		if email_enabled:
-			self.scheduler.add_job(self._send_email_report, CronTrigger(hour="11,19", minute=0))
+			self.scheduler.add_job(self._send_results_report, CronTrigger(hour=11, minute=0, timezone=pytz.timezone("Europe/Moscow")))
 			# Fallback checker every minute: if missed today after scheduled time, send once
 			self.scheduler.add_job(self._email_report_fallback_worker, CronTrigger(minute="*"))
 		# Usability report at 08:00 Moscow time (daily) — always register
