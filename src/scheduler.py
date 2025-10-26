@@ -537,13 +537,103 @@ class StatsScheduler:
 			if count_today >= needed:
 				return
 			# send once
-			await self._send_email_report()
+			await self._send_results_report()
 			try:
 				self.db.log(None, "email_report_fallback", {"needed": needed, "count_today": count_today})
 			except Exception:
 				pass
 		except Exception:
 			pass 
+
+	async def _send_results_report(self) -> None:
+		"""Build and send RESULTS report (перфоманс): meetings, cross, penetration."""
+		settings = get_settings()
+		if not settings.smtp_host or not settings.smtp_user or not settings.smtp_pass:
+			try:
+				self.db.log(None, "results_report_skip", {"reason": "smtp_not_configured"})
+			except Exception:
+				pass
+			return
+		if not getattr(settings, "email_to_csv", ""):
+			try:
+				self.db.log(None, "results_report_skip", {"reason": "recipient_not_set"})
+			except Exception:
+				pass
+			return
+		try:
+			msk = pytz.timezone("Europe/Moscow")
+			today = datetime.now(msk).date()
+			start_month = today.replace(day=1)
+			TEST_NAMES = {"agent1", "agent2", "agent3", "agent4"}
+			res = self.db.client.table("employees").select("tg_id, agent_name, active").eq("active", True).execute()
+			emps = [r for r in (getattr(res, "data", []) or [])]
+			rows: List[Dict[str, object]] = []
+			for r in emps:
+				tg = int(r["tg_id"])
+				name = r.get("agent_name") or f"agent?{tg}"
+				if isinstance(name, str) and name.strip().lower() in TEST_NAMES:
+					continue
+				m_day = self.db.meets_period_count(tg, today, today)
+				m_month = self.db.meets_period_count(tg, start_month, today)
+				t_day, _ = self.db._sum_attempts_query(tg, today, today)
+				t_month, _ = self.db._sum_attempts_query(tg, start_month, today)
+				pen_day = (t_day * 100 / m_day) if m_day > 0 else 0
+				pen_month = (t_month * 100 / m_month) if m_month > 0 else 0
+				target = int(self.db.compute_plan_breakdown(tg, today).get("penetration_target_pct", 50))
+				compl_day = int(round((pen_day / (target if target > 0 else 1)) * 100))
+				compl_month = int(round((pen_month / (target if target > 0 else 1)) * 100))
+				rows.append({
+					"tg_id": tg,
+					"Агент": name,
+					"Встречи (день)": m_day,
+					"Встречи (месяц)": m_month,
+					"Кросс (день)": t_day,
+					"Кросс (месяц)": t_month,
+					"Проникновение % (день)": int(round(pen_day)),
+					"Проникновение % (месяц)": int(round(pen_month)),
+					"Выполнение % (день)": compl_day,
+					"Выполнение % (месяц)": compl_month,
+				})
+			# Build attachment
+			buf = io.BytesIO()
+			if pd is not None:
+				df = pd.DataFrame(rows)
+				df.to_excel(buf, index=False)
+				filename = f"report_{today.isoformat()}.xlsx"
+				ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+			else:
+				import csv
+				filename = f"report_{today.isoformat()}.csv"
+				ctype = "text/csv"
+				w = io.StringIO()
+				writer = csv.DictWriter(w, fieldnames=list(rows[0].keys()) if rows else [])
+				writer.writeheader()
+				for rr in rows:
+					writer.writerow(rr)
+				buf = io.BytesIO(w.getvalue().encode("utf-8-sig"))
+			# Send email
+			msg = EmailMessage()
+			msg["From"] = settings.email_from
+			msg["To"] = settings.email_to_csv
+			msg["Subject"] = f"AI BDM отчёт {today.isoformat()}"
+			msg.set_content("Отчёт по результатам во вложении.")
+			msg.add_attachment(buf.getvalue(), maintype=ctype.split('/')[0], subtype=ctype.split('/')[1], filename=filename)
+			if getattr(settings, "smtp_ssl", False):
+				s = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port)
+			else:
+				s = smtplib.SMTP(settings.smtp_host, settings.smtp_port); s.starttls()
+			s.login(settings.smtp_user, settings.smtp_pass)
+			s.send_message(msg)
+			s.quit()
+			try:
+				self.db.log(None, "email_report_sent", {"to": settings.email_to_csv, "filename": filename, "rows": len(rows)})
+			except Exception:
+				pass
+		except Exception as e:
+			try:
+				self.db.log(None, "email_report_send_error", {"error": str(e)})
+			except Exception:
+				pass
 
 	async def _send_usability_report(self) -> None:
 		settings = get_settings()
