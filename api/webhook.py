@@ -478,6 +478,22 @@ async def send_usability_now(request: Request) -> JSONResponse:
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
+
+@app.post("/api/send_results_now")
+async def send_results_now(request: Request) -> JSONResponse:
+    expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
+    token = request.query_params.get("token")
+    if expected and token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        async def dummy_push(chat_id: int, text: str) -> None:
+            return None
+        sch = StatsScheduler(db, dummy_push)
+        await sch._send_results_report()
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
 @app.post("/api/set_smtp")
 async def set_smtp(request: Request) -> JSONResponse:
     expected = os.environ.get("NOTIFY_TOKEN") or os.environ.get("RAG_TOKEN")
